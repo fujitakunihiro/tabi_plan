@@ -12,3 +12,157 @@
 .sidebar-bottom,.topbar-right,.page-intro .eyebrow,.results-heading .eyebrow,.generated-badge,.overview-weather{display:none}.topbar{height:56px}.page-intro{padding-top:42px}.planner-card,.trip-overview,.day-content{border-color:#e5e5e7;background:#fff}.chip.selected{background:#f3f3f4;border-color:#bfc0c2;color:#333}.primary-button,.day-tab.active{background:#1d1d1f;border-color:#1d1d1f}.primary-button:hover{background:#38383b}
 body{font-family:-apple-system,BlinkMacSystemFont,"Yu Gothic UI","Yu Gothic","Hiragino Kaku Gothic ProN","Meiryo",sans-serif;font-size:15px;line-height:1.55;color:#1d1d1f}.brand{font-size:23px}.sidebar-label{font-size:11px}.nav-link{font-size:14px}.tip-card p{font-size:14px}.tip-card>span:last-child{font-size:11px}.profile strong{font-size:13px}.profile small{font-size:11px}.breadcrumb{font-size:12px}.topbar-right{font-size:11px}.page-intro{padding-top:45px;padding-bottom:27px}.eyebrow{font-size:11px}.page-intro h1{font-size:36px;letter-spacing:-1.4px}.page-intro p{font-size:15px}.planner-card{padding:24px 26px 22px;border-radius:14px;box-shadow:0 3px 14px #1d1d1f08}.step-number{width:26px;height:26px;font-size:11px}.form-heading{font-size:15px}.required-note{font-size:11px}.field-label{font-size:12px}.input-wrap,.select-wrap{height:46px;border-radius:9px}.input-wrap input,.select-wrap select{font-size:15px}.input-wrap input[type=date]{font-size:13px}.optional{font-size:11px}.chip{height:34px;padding-inline:12px;font-size:12px}.chip span{font-size:14px}.form-hint{font-size:11px}.primary-button{height:44px;padding-inline:17px;border-radius:9px;font-size:14px}.results-section{padding-top:34px}.results-heading h2{font-size:27px}.results-heading p{font-size:13px}.generated-badge{font-size:9px}.icon-button,.save-button{height:38px}.icon-button{width:40px;font-size:17px}.save-button{padding-inline:13px;font-size:12px}.trip-overview{min-height:72px;padding:14px 18px;border-radius:12px}.overview-icon{width:36px;height:36px;font-size:16px}.overview-item small{font-size:11px}.overview-item strong{font-size:13px}.overview-weather{font-size:11px}.day-tabs{gap:8px}.day-tab{min-width:95px;padding:10px 13px;border-radius:9px}.day-tab small{font-size:10px}.day-tab strong{font-size:14px}.day-content{padding:20px 22px 15px;border-radius:13px}.day-title-row h3{font-size:17px}.day-title-row p{font-size:12px}.day-tag{font-size:11px}.event{min-height:72px}.event-time{font-size:13px}.event-emoji{flex-basis:38px;height:38px;font-size:18px}.event-card{gap:12px;padding:11px 12px;border-radius:9px}.event-info strong{font-size:14px}.event-info small{font-size:11px}.event-duration{font-size:10px}.travel-gap{font-size:10px}.day-tools button{font-size:12px;padding:8px 11px}.event-actions button{font-size:11px;padding:7px 9px}.edit-time-field,.edit-text-field{display:grid;gap:4px;color:#6e6e73;font-size:11px}.edit-time-field{min-width:112px}.edit-time-field input,.event-time-edit{width:100%;min-height:40px;padding:6px 8px;border:1px solid #d8d8dc;border-radius:8px;background:#fff;color:#1d1d1f;font:500 14px inherit}.event.is-editing{grid-template-columns:120px minmax(0,1fr) auto;min-height:90px}.event.is-editing>.event-rail{display:none}.event.is-editing .event-card{padding:12px}.event-card .event-info input{min-height:37px;padding:5px 7px;border:1px solid #d8d8dc;border-radius:7px;background:#fff;font-size:14px}.event-card .event-info .event-kind-edit{margin-top:0;font-size:13px}.event-card .event-info .edit-text-field{font-size:11px}.event-actions .event-save,.event-actions .event-cancel{font-size:12px;padding:8px 11px}.empty-day{font-size:14px}.itinerary-note{padding:15px 17px;border-radius:10px}.itinerary-note strong{font-size:12px}.itinerary-note p{font-size:11px}.itinerary-note button{font-size:11px;padding:9px 11px}.page-footer{font-size:10px}
 @media(max-width:720px){.page-intro{padding-top:31px}.page-intro h1{font-size:28px}.page-intro p{font-size:13px}.planner-card{padding:18px 15px}.field-label{font-size:11px}.input-wrap,.select-wrap{height:44px}.input-wrap input,.select-wrap select{font-size:14px}.chip{height:33px;font-size:11px}.primary-button{height:42px;font-size:13px}.form-hint{font-size:10px}.results-heading h2{font-size:22px}.results-heading p{font-size:11px}.trip-overview{padding:10px 8px}.overview-item small{font-size:9px}.overview-item strong{font-size:10px}.day-tab{min-width:83px;padding:9px 10px}.day-tab small{font-size:9px}.day-tab strong{font-size:12px}.day-content{padding:14px 11px}.day-title-row h3{font-size:14px}.day-title-row p{font-size:10px}.day-tools button{font-size:10px;padding:7px}.event{grid-template-columns:42px 1fr auto;min-height:68px;gap:7px}.event-list:before,.event-rail{display:none}.event-time{font-size:11px}.event-card{gap:8px;padding:9px}.event-emoji{flex-basis:31px;height:31px;font-size:15px}.event-info strong{font-size:12px}.event-info small{font-size:10px}.event-actions button{font-size:9px;padding:7px 5px}.event.is-editing{grid-template-columns:1fr auto;gap:8px}.event.is-editing .edit-time-field{grid-column:1/-1;min-width:0}.event.is-editing .event-card{grid-column:1/-1}.event.is-editing .event-actions{grid-column:1/-1;justify-content:flex-end}.event-card .event-info input{font-size:13px}.itinerary-note strong{font-size:11px}.itinerary-note p{font-size:10px}}
+
+/* Apple HIG inspired: clear hierarchy, system type, restrained color, and generous touch targets. */
+:root{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Yu Gothic UI","Yu Gothic","Hiragino Kaku Gothic ProN","Meiryo",sans-serif;color:#1d1d1f;background:#f5f5f7;--ink:#1d1d1f;--muted:#6e6e73;--line:#e5e5ea;--paper:#fff;--soft:#f5f5f7}
+body{font-size:16px;line-height:1.55;color:#1d1d1f;background:#f5f5f7}
+.main-content{max-width:1240px;padding:0 clamp(22px,5vw,64px)}
+.topbar{height:60px;border-color:#e5e5ea}
+.breadcrumb{font-size:13px}
+.page-intro{padding:40px 0 26px}
+.page-intro h1{margin:0 0 8px;font-size:clamp(30px,4vw,40px);line-height:1.2;letter-spacing:-1.1px;font-weight:650}
+.page-intro h1 em{color:#1d1d1f}
+.page-intro p{font-size:15px;color:#6e6e73}
+.planner-card{padding:25px 26px 22px;border:1px solid #e5e5ea;border-radius:16px;box-shadow:0 2px 12px #1d1d1f08}
+.form-topline{margin-bottom:20px}
+.step-number{width:28px;height:28px;border-radius:50%;background:#f2f2f7;color:#1d1d1f;font-size:12px}
+.form-heading{font-size:16px;font-weight:600}
+.required-note{font-size:12px;color:#6e6e73}
+.form-grid{gap:16px}
+.field{gap:8px}
+.field-label{font-size:13px;color:#3a3a3c}
+.input-wrap,.select-wrap{height:48px;padding:0 12px;border-color:#d2d2d7;border-radius:10px;background:#fff}
+.input-wrap:focus-within,.select-wrap:focus-within{border-color:#007aff;box-shadow:0 0 0 3px #007aff24}
+.field-icon{font-size:15px;color:#6e6e73}
+.input-wrap input,.select-wrap select{font:500 15px inherit;color:#1d1d1f}
+.input-wrap input[type=date]{font-size:14px;color:#1d1d1f}
+.input-wrap input::placeholder{color:#8e8e93}
+.interest-row{gap:16px;margin-top:20px}
+.optional{font-size:11px;color:#6e6e73}
+.chips{gap:8px}
+.chip{height:40px;padding:0 13px;border-color:#d2d2d7;border-radius:20px;color:#3a3a3c;font-size:13px}
+.chip span{font-size:15px}
+.chip.selected{border-color:#007aff;background:#eef6ff;color:#0066cc}
+.form-footer{gap:14px;margin-top:21px;padding-top:17px;border-color:#e5e5ea}
+.form-hint{font-size:12px;line-height:1.55;color:#6e6e73}
+#api-status{max-width:520px;font-size:13px;line-height:1.5}
+.primary-button{min-height:48px;height:auto;padding:0 20px;border-radius:11px;background:#007aff;color:#fff;font-size:15px;font-weight:600;white-space:nowrap}
+.primary-button:hover{background:#0066d6;transform:none}
+.results-section{padding-top:38px}
+.results-heading{margin-bottom:18px}
+.results-heading h2{margin:0 0 5px;font-size:28px;letter-spacing:-.5px;font-weight:650}
+.results-heading p{font-size:13px;line-height:1.5;color:#6e6e73}
+.icon-button,.save-button{height:42px;border-color:#d2d2d7;border-radius:10px;color:#1d1d1f}
+.icon-button{width:42px;font-size:18px}
+.save-button{padding:0 14px;font-size:13px}
+.trip-overview{min-height:82px;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;padding:16px 20px;border:1px solid #e5e5ea;border-radius:14px}
+.overview-item{gap:11px;min-width:0}
+.overview-icon{width:38px;height:38px;border-radius:11px;background:#f2f2f7;color:#4b4b50}
+.overview-icon.peach,.overview-icon.mint{background:#f2f2f7;color:#4b4b50}
+.overview-item small{font-size:11px;color:#6e6e73}
+.overview-item strong{font-size:14px;color:#1d1d1f;overflow-wrap:anywhere}
+.overview-divider{display:none}
+.day-tabs{gap:8px;margin:18px 0 10px;padding-bottom:2px}
+.day-tab{flex:0 0 auto;min-width:102px;padding:10px 13px;border-color:#d2d2d7;border-radius:10px;color:#3a3a3c}
+.day-tab small{font-size:11px;white-space:nowrap}
+.day-tab strong{font-size:14px;white-space:nowrap}
+.day-tab.active{background:#1d1d1f;border-color:#1d1d1f}
+.day-content{padding:22px 24px 18px;border:1px solid #e5e5ea;border-radius:14px}
+.day-title-row{margin-bottom:16px}
+.day-title-row h3{font-size:18px;font-weight:650}
+.day-title-row p{font-size:12px;color:#6e6e73}
+.day-tag{padding:6px 10px;background:#f2f2f7;color:#4b4b50;font-size:11px}
+.event{min-height:78px;grid-template-columns:54px 18px minmax(0,1fr) auto;gap:12px}
+.event-list:before{left:67px;background:#d2d2d7}
+.event-time{font-size:14px;color:#3a3a3c}
+.event-rail{background:#8e8e93;box-shadow:0 0 0 1px #d2d2d7}
+.event-card{gap:12px;padding:11px 13px;border-color:#e5e5ea;border-radius:10px}
+.event-emoji{flex-basis:38px;height:38px;border-radius:10px;background:#f2f2f7!important;font-size:18px}
+.event-info strong{font-size:15px;color:#1d1d1f}
+.event-info small{font-size:12px;color:#6e6e73}
+.event-duration{padding:5px 8px;border-radius:6px;background:#f5f5f7;color:#6e6e73;font-size:11px}
+.travel-gap{margin-left:69px;color:#6e6e73;font-size:11px}
+.travel-gap:before{background:#d2d2d7}
+.day-tools{gap:8px}
+.day-tools button,.event-actions button{min-height:40px;padding:8px 12px;border-color:#d2d2d7;border-radius:9px;background:#fff;color:#3a3a3c;font-size:12px}
+.day-tools .add-event-button{border-color:#007aff;background:#fff;color:#007aff}
+.day-tools .remove-day-button,.event-actions .event-delete{color:#d70015}
+.event-actions{gap:6px}
+.event-actions button{min-height:36px;padding:6px 10px;font-size:11px}
+.event-actions .event-save{border-color:#007aff;background:#007aff;color:#fff}
+.empty-day{font-size:14px;color:#6e6e73}
+.itinerary-note{padding:16px 18px;border:1px solid #e5e5ea;border-radius:12px;background:#fff}
+.itinerary-note strong{font-size:13px}
+.itinerary-note p{font-size:12px;color:#6e6e73;line-height:1.6}
+.itinerary-note button{min-height:40px;padding:8px 12px;border-radius:9px;font-size:12px}
+.page-footer{padding:26px 0 30px;color:#6e6e73;font-size:11px}
+@media(max-width:900px){.form-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.form-grid .field:first-child{grid-column:1/-1}}
+@media(max-width:720px){
+ .main-content{margin-left:0;padding:0 18px}
+ .topbar{height:52px}
+ .page-intro{padding:29px 0 20px}
+ .page-intro h1{font-size:30px}
+ .page-intro p{font-size:14px}
+ .planner-card{padding:19px 17px;border-radius:15px}
+ .form-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:14px 10px}
+ .form-grid .field:first-child{grid-column:1/-1}
+ .field-label{font-size:12px}
+ .input-wrap,.select-wrap{height:46px;padding:0 9px}
+ .input-wrap input[type=date]{font-size:12px}
+ .interest-row{display:block;margin-top:18px}
+ .interest-row>.field-label{display:block;margin-bottom:9px}
+ .chips{gap:7px}
+ .chip{height:38px;padding-inline:11px;font-size:12px}
+ .form-footer{align-items:stretch;flex-direction:column;padding-top:15px}
+ .form-hint{max-width:none;line-height:1.6}
+ .primary-button{width:100%;justify-content:center;min-height:48px}
+ .results-section{padding-top:29px}
+ .results-heading{align-items:flex-start;gap:12px}
+ .results-heading h2{font-size:24px}
+ .results-heading p{font-size:12px;max-width:245px}
+ .result-actions{flex:0 0 auto}
+ .trip-overview{gap:8px;padding:12px 9px;border-radius:12px}
+ .overview-item{align-items:flex-start;flex-direction:column;gap:5px}
+ .overview-icon{width:30px;height:30px}
+ .overview-item small{font-size:10px}
+ .overview-item strong{font-size:11px;line-height:1.35}
+ .day-tabs{margin-top:15px}
+ .day-tab{min-width:94px;padding:9px 10px}
+ .day-tab small{font-size:10px}
+ .day-tab strong{font-size:13px}
+ .day-content{padding:15px 12px;border-radius:12px}
+ .day-title-row{align-items:flex-start;gap:9px}
+ .day-title-row h3{font-size:15px}
+ .day-title-row p{font-size:11px}
+ .day-tools{justify-content:flex-end;flex-wrap:wrap}
+ .day-tools button{min-height:36px;padding:6px 8px;font-size:10px}
+ .event{grid-template-columns:44px minmax(0,1fr) auto;gap:7px;min-height:68px}
+ .event-list:before,.event-rail{display:none}
+ .event-time{font-size:12px}
+ .event-card{gap:8px;padding:9px}
+ .event-emoji{flex-basis:31px;height:31px;font-size:15px}
+ .event-info strong{font-size:13px}
+ .event-info small{font-size:10px}
+ .event-duration{display:none}
+ .event-actions{gap:3px}
+ .event-actions button{min-height:34px;padding:5px 7px;font-size:10px}
+ .event.is-editing{grid-template-columns:1fr auto;gap:8px}
+ .event.is-editing .edit-time-field{grid-column:1/-1;min-width:0}
+ .event.is-editing .event-card{grid-column:1/-1}
+ .event.is-editing .event-actions{grid-column:1/-1;justify-content:flex-end}
+ .event-card .event-info input{font-size:13px}
+ .travel-gap{margin-left:0}
+ .itinerary-note{padding:13px}
+}
+@media(max-width:380px){.main-content{padding-inline:14px}.planner-card{padding-inline:13px}.trip-overview{padding-inline:7px}.overview-item strong{font-size:10px}.result-actions{gap:4px}.save-button{padding-inline:9px;font-size:11px}.icon-button{width:38px}}
+.input-wrap:has(input[type=date]){gap:0}
+.input-wrap:has(input[type=date]) .field-icon{display:none}
+@media(max-width:720px){.trip-overview{grid-template-columns:1.4fr .8fr .8fr}}
+.input-wrap input,.select-wrap select,.primary-button,.save-button,.day-tools button,.event-actions button,.event-time-edit,.event-card .event-info input{font-family:inherit}
+.input-wrap input,.select-wrap select{font-size:15px;font-weight:500}
+.input-wrap input[type=date]{font-size:14px}
+.primary-button{font-size:15px;font-weight:600}
+.save-button,.day-tools button,.event-actions button{font-size:12px;font-weight:500}
+.event-card .event-info input{font-size:14px;font-weight:500}
+.event-time-edit{font-size:14px;font-weight:500}
+@media(max-width:720px){.input-wrap input,.select-wrap select{font-size:14px}.input-wrap input[type=date]{font-size:12px}.primary-button{font-size:14px}.day-tools button,.event-actions button{font-size:10px}}
