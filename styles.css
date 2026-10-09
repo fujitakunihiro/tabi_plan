@@ -173,6 +173,15 @@ body{font-size:16px;line-height:1.55;color:#1d1d1f;background:#f5f5f7}
 .saved-trip-delete:hover{background:#fff1f0}
 .saved-dialog-empty{margin:0;padding:24px 12px;border:1px dashed #d2d2d7;border-radius:12px;color:#6e6e73;text-align:center;font-size:14px}
 @media(max-width:520px){.saved-dialog{padding:19px;border-radius:17px}.saved-dialog-heading h2{font-size:24px}.saved-trip-row{gap:2px;padding:5px}.saved-trip-open{padding:8px 7px}.saved-trip-delete{padding:0 7px}}
+.route-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:13px 2px 8px;color:#6e6e73;font-size:12px}
+.route-toolbar label{display:flex;align-items:center;gap:9px;color:#3a3a3c;font-weight:600}
+.route-toolbar select{min-height:38px;padding:0 30px 0 11px;border:1px solid #d2d2d7;border-radius:9px;background:#fff;color:#1d1d1f;font:inherit;font-weight:500}
+#route-status{line-height:1.5;text-align:right}
+.google-maps-attribution{color:#5e5e5e;font-family:Roboto,Arial,sans-serif;font-size:12px;font-style:normal;font-weight:400;letter-spacing:normal;white-space:nowrap}
+.travel-gap{min-height:25px;color:#007aff;font-size:11px}
+.travel-gap:before{height:16px;background:#b8d7ff}
+@media(max-width:720px){.route-toolbar{align-items:flex-start;flex-direction:column;gap:6px;margin:13px 1px 9px;font-size:11px}.route-toolbar label{font-size:12px}#route-status{text-align:left}.travel-gap{font-size:10px}}
+.page-footer nav{display:flex;gap:12px}.page-footer nav a,.legal-page>a{color:#007aff;text-decoration:none}.legal-body{min-width:320px;padding:30px 18px;background:#f5f5f7;color:#1d1d1f;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Yu Gothic UI","Yu Gothic","Hiragino Kaku Gothic ProN","Meiryo",sans-serif}.legal-page{max-width:760px;margin:0 auto;padding:clamp(24px,5vw,48px);border:1px solid #e5e5ea;border-radius:18px;background:#fff;line-height:1.75}.legal-page h1{margin:28px 0;font-size:clamp(28px,5vw,40px);letter-spacing:-.5px}.legal-page p{margin:0 0 18px;color:#3a3a3c;font-size:15px}.legal-page a{color:#007aff}.legal-page code{font-size:13px}
 .input-wrap:has(input[type=date]){gap:0}
 .input-wrap:has(input[type=date]) .field-icon{display:none}
 @media(max-width:720px){.trip-overview{grid-template-columns:1.4fr .8fr .8fr}}

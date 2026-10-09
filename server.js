@@ -6,6 +6,7 @@ const initSqlJs = require("sql.js");
 const PORT = Number(process.env.PORT || 3000);
 const MODEL = process.env.OPENAI_MODEL || "gpt-6-luna";
 const API_KEY = process.env.OPENAI_API_KEY || "";
+const MAPS_API_KEY = process.env.GOOGLE_MAPS_API_KEY || "";
 const ROOT = __dirname;
 const DB_FILE = process.env.DB_PATH || path.join(ROOT, "data", "tabi.sqlite");
 let db;
@@ -14,6 +15,8 @@ const files = new Map([
   ["/index.html", ["index.html", "text/html; charset=utf-8"]],
   ["/app.js", ["app.js", "text/javascript; charset=utf-8"]],
   ["/styles.css", ["styles.css", "text/css; charset=utf-8"]],
+  ["/terms.html", ["terms.html", "text/html; charset=utf-8"]],
+  ["/privacy.html", ["privacy.html", "text/html; charset=utf-8"]],
 ]);
 const interestNames = { culture: "文化・歴史", food: "グルメ", nature: "自然・景色", shopping: "ショッピング", art: "アート" };
 const paceNames = { relaxed: "ゆったり", balanced: "ちょうどいい", active: "たっぷり満喫" };
@@ -212,6 +215,67 @@ async function createItinerary(req, res) {
   }
 }
 
+function formatRouteAddress(name, destination) {
+  return `${name.trim()}, ${destination.trim()}`;
+}
+
+function isPreciseWaypoint(result) {
+  if (!result || result.geocoderStatus?.code !== "OK" || result.partialMatch) return false;
+  const broadTypes = new Set(["country", "locality", "political", "route", "postal_code", "administrative_area_level_1", "administrative_area_level_2"]);
+  return Array.isArray(result.type) && result.type.length > 0 && !result.type.every((type) => broadTypes.has(type));
+}
+
+async function getGoogleRoute(destination, originEvent, targetEvent, travelMode) {
+  const request = {
+    origin: { address: formatRouteAddress(originEvent.name, destination) },
+    destination: { address: formatRouteAddress(targetEvent.name, destination) },
+    travelMode,
+    languageCode: "ja",
+    units: "METRIC",
+  };
+  if (travelMode === "DRIVE") request.routingPreference = "TRAFFIC_AWARE";
+  if (travelMode === "TRANSIT") request.transitPreferences = { routingPreference: "LESS_WALKING" };
+  const response = await fetch("https://routes.googleapis.com/directions/v2:computeRoutes", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Goog-Api-Key": MAPS_API_KEY, "X-Goog-FieldMask": "routes.duration,routes.distanceMeters,geocodingResults.origin,geocodingResults.destination" },
+    body: JSON.stringify(request),
+    signal: AbortSignal.timeout(25000),
+  });
+  if (!response.ok) throw new Error("Google Maps Routes API request failed");
+  const data = await response.json();
+  const geocoding = data.geocodingResults;
+  const route = data.routes?.[0];
+  const seconds = Number.parseInt(route?.duration || "", 10);
+  if (!route || !isPreciseWaypoint(geocoding?.origin) || !isPreciseWaypoint(geocoding?.destination) || !Number.isFinite(seconds)) {
+    return { available: false, reason: "場所を特定できません" };
+  }
+  const result = { available: true, durationSeconds: seconds, distanceMeters: route.distanceMeters };
+  routeCache.set(cacheKey, { result, expiresAt: Date.now() + 10 * 60 * 1000 });
+  return result;
+}
+
+async function getRouteEstimates(req, res) {
+  let input;
+  try {
+    input = await readJSON(req, 64 * 1024);
+  } catch {
+    return sendJSON(res, 400, { error: "経路検索の条件を読み取れませんでした。" });
+  }
+  if (typeof input.destination !== "string" || !input.destination.trim() || input.destination.length > 80 || !Array.isArray(input.events) || input.events.length > 21 || !["TRANSIT", "WALK", "DRIVE"].includes(input.travelMode)) {
+    return sendJSON(res, 400, { error: "経路検索の条件を確認してください。" });
+  }
+  if (!MAPS_API_KEY) return sendJSON(res, 200, { configured: false, segments: [] });
+  if (input.events.some((event) => !event || typeof event.name !== "string" || !event.name.trim() || event.name.length > 160)) return sendJSON(res, 400, { error: "予定名を確認してください。" });
+  const segments = await Promise.all(input.events.slice(1).map(async (event, index) => {
+    try {
+      return { index, ...await getGoogleRoute(input.destination, input.events[index], event, input.travelMode) };
+    } catch {
+      return { index, available: false, reason: "経路を取得できません" };
+    }
+  }));
+  return sendJSON(res, 200, { configured: true, travelMode: input.travelMode, segments });
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
   if (url.pathname === "/api/storage" && req.method === "GET") return sendJSON(res, 200, { draft: getState("draft"), saved: listSavedTrips() });
@@ -242,8 +306,9 @@ const server = http.createServer(async (req, res) => {
     persistDatabase();
     return sendJSON(res, 200, { saved: listSavedTrips() });
   }
-  if (url.pathname === "/api/status" && req.method === "GET") return sendJSON(res, 200, { configured: Boolean(API_KEY), model: MODEL });
+  if (url.pathname === "/api/status" && req.method === "GET") return sendJSON(res, 200, { configured: Boolean(API_KEY), mapsConfigured: Boolean(MAPS_API_KEY), model: MODEL });
   if (url.pathname === "/api/itinerary" && req.method === "POST") return createItinerary(req, res);
+  if (url.pathname === "/api/routes" && req.method === "POST") return getRouteEstimates(req, res);
   if (req.method !== "GET" && req.method !== "HEAD") {
     res.writeHead(405, { Allow: "GET, HEAD, POST" });
     return res.end();
