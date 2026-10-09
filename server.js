@@ -1,11 +1,14 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const http = require("node:http");
+const initSqlJs = require("sql.js");
 
 const PORT = Number(process.env.PORT || 3000);
 const MODEL = process.env.OPENAI_MODEL || "gpt-6-luna";
 const API_KEY = process.env.OPENAI_API_KEY || "";
 const ROOT = __dirname;
+const DB_FILE = process.env.DB_PATH || path.join(ROOT, "data", "tabi.sqlite");
+let db;
 const files = new Map([
   ["/", ["index.html", "text/html; charset=utf-8"]],
   ["/index.html", ["index.html", "text/html; charset=utf-8"]],
@@ -73,15 +76,67 @@ function validateTrip(input) {
   return null;
 }
 
-async function readJSON(req) {
+async function readJSON(req, maxBytes = 24 * 1024) {
   const chunks = [];
   let length = 0;
   for await (const chunk of req) {
     length += chunk.length;
-    if (length > 24 * 1024) throw new Error("request_too_large");
+    if (length > maxBytes) throw new Error("request_too_large");
     chunks.push(chunk);
   }
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+}
+
+function persistDatabase() {
+  fs.mkdirSync(path.dirname(DB_FILE), { recursive: true });
+  fs.writeFileSync(DB_FILE, Buffer.from(db.export()));
+}
+
+function getState(key) {
+  const statement = db.prepare("SELECT value FROM app_state WHERE key = ?");
+  statement.bind([key]);
+  const value = statement.step() ? statement.getAsObject().value : null;
+  statement.free();
+  return value === null ? null : JSON.parse(value);
+}
+
+function setState(key, value) {
+  db.run("INSERT INTO app_state (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [key, JSON.stringify(value)]);
+  persistDatabase();
+}
+
+function listSavedTrips() {
+  const statement = db.prepare("SELECT value FROM itineraries ORDER BY updated_at DESC");
+  const trips = [];
+  while (statement.step()) trips.push(JSON.parse(statement.getAsObject().value));
+  statement.free();
+  return trips;
+}
+
+function validateStoredTrip(trip) {
+  if (!trip || typeof trip !== "object" || typeof trip.destination !== "string" || !trip.destination.trim() || trip.destination.length > 80) return false;
+  if (!isRealDate(trip.startDate) || !isRealDate(trip.endDate) || !Array.isArray(trip.days) || trip.days.length < 1 || trip.days.length > 21) return false;
+  return trip.days.every((day) => day && typeof day === "object" && Array.isArray(day.events) && day.events.length <= 100 && day.events.every((event) => event && typeof event.name === "string" && typeof event.time === "string"));
+}
+
+function saveStoredTrip(trip) {
+  if (!validateStoredTrip(trip)) return false;
+  const id = `${trip.destination.trim()}|${trip.startDate}`;
+  const value = JSON.stringify({ ...trip, destination: trip.destination.trim() });
+  db.run("INSERT INTO itineraries (id, destination, start_date, updated_at, value) VALUES (?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at, value = excluded.value", [id, trip.destination.trim(), trip.startDate, new Date().toISOString(), value]);
+  persistDatabase();
+  return true;
+}
+
+function initializeDatabase() {
+  fs.mkdirSync(path.dirname(DB_FILE), { recursive: true });
+  const SQL = initSqlJs({ locateFile: (file) => require.resolve(`sql.js/dist/${file}`) });
+  return SQL.then((sqlite) => {
+    db = fs.existsSync(DB_FILE) ? new sqlite.Database(fs.readFileSync(DB_FILE)) : new sqlite.Database();
+    db.run("CREATE TABLE IF NOT EXISTS app_state (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
+    db.run("CREATE TABLE IF NOT EXISTS itineraries (id TEXT PRIMARY KEY, destination TEXT NOT NULL, start_date TEXT NOT NULL, updated_at TEXT NOT NULL, value TEXT NOT NULL)");
+    persistDatabase();
+  });
 }
 
 function getOutputText(response) {
@@ -159,6 +214,34 @@ async function createItinerary(req, res) {
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
+  if (url.pathname === "/api/storage" && req.method === "GET") return sendJSON(res, 200, { draft: getState("draft"), saved: listSavedTrips() });
+  if (url.pathname === "/api/storage/draft" && req.method === "PUT") {
+    try {
+      const body = await readJSON(req, 1024 * 1024);
+      if (body.draft !== null && !validateStoredTrip(body.draft)) return sendJSON(res, 400, { error: "保存する旅程の内容を確認してください。" });
+      setState("draft", body.draft);
+      return sendJSON(res, 200, { ok: true });
+    } catch (error) {
+      return sendJSON(res, error.message === "request_too_large" ? 413 : 400, { error: "旅程を保存できませんでした。" });
+    }
+  }
+  if (url.pathname === "/api/storage/saved" && req.method === "POST") {
+    try {
+      const body = await readJSON(req, 1024 * 1024);
+      if (!saveStoredTrip(body.trip)) return sendJSON(res, 400, { error: "保存する旅程の内容を確認してください。" });
+      return sendJSON(res, 200, { saved: listSavedTrips() });
+    } catch (error) {
+      return sendJSON(res, error.message === "request_too_large" ? 413 : 400, { error: "旅程を保存できませんでした。" });
+    }
+  }
+  if (url.pathname === "/api/storage/saved" && req.method === "DELETE") {
+    const destination = url.searchParams.get("destination");
+    const startDate = url.searchParams.get("startDate");
+    if (!destination || !isRealDate(startDate)) return sendJSON(res, 400, { error: "削除する旅程を特定できません。" });
+    db.run("DELETE FROM itineraries WHERE id = ?", [`${destination}|${startDate}`]);
+    persistDatabase();
+    return sendJSON(res, 200, { saved: listSavedTrips() });
+  }
   if (url.pathname === "/api/status" && req.method === "GET") return sendJSON(res, 200, { configured: Boolean(API_KEY), model: MODEL });
   if (url.pathname === "/api/itinerary" && req.method === "POST") return createItinerary(req, res);
   if (req.method !== "GET" && req.method !== "HEAD") {
@@ -182,4 +265,5 @@ const server = http.createServer(async (req, res) => {
   fs.createReadStream(path.join(ROOT, file[0])).pipe(res);
 });
 
-server.listen(PORT, "0.0.0.0", () => console.log(`tabi server listening on ${PORT} (${MODEL})`));
+initializeDatabase().then(() => server.listen(PORT, "0.0.0.0", () => console.log(`tabi server listening on ${PORT} (${MODEL})`)))
+  .catch((error) => { console.error("Could not initialize the itinerary database:", error); process.exitCode = 1; });

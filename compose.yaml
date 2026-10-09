@@ -7,4 +7,10 @@ services:
       PORT: 3000
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-6-luna}
+      DB_PATH: /app/data/tabi.sqlite
+    volumes:
+      - tabi-data:/app/data
     restart: unless-stopped
+
+volumes:
+  tabi-data:
