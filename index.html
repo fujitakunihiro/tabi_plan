@@ -6,8 +6,8 @@
     <meta name="theme-color" content="#f7f7f3" />
     <meta name="description" content="行き先と日程から、あなたにぴったりの旅程を自動でつくる旅行スケジューラー。" />
     <title>tabi. — 旅のスケジューラー</title>
-    <link rel="stylesheet" href="/styles.css?v=6" />
-    <script src="/app.js?v=6" defer></script>
+    <link rel="stylesheet" href="/styles.css?v=8" />
+    <script src="/app.js?v=8" defer></script>
   </head>
   <body>
     <div class="app-shell">
@@ -29,7 +29,7 @@
         <section class="page-intro" id="planner">
           <div class="eyebrow"><span></span> YOUR NEXT ADVENTURE</div>
           <h1>次の旅を、<em>ちょうどよく。</em></h1>
-          <p>行き先と日程を入れるだけ。あなたのペースに合わせて、旅の予定を組み立てます。</p>
+          <p>行き先・日程・好みからGPT-6 Lunaが旅程を提案。予定はあとから自由に編集できます。</p>
         </section>
 
         <section class="planner-card" aria-label="旅程の条件">
@@ -48,16 +48,16 @@
               <label class="chip"><input type="checkbox" value="shopping" /><span>◇</span>ショッピング</label>
               <label class="chip"><input type="checkbox" value="art" /><span>◉</span>アート</label>
             </div></div>
-            <div class="form-footer"><span class="form-hint"><span>✓</span> 入力や変更は自動保存されます</span><button class="primary-button" type="submit"><span>✦</span> 旅程をつくる <span class="button-arrow">↗</span></button></div>
+            <div class="form-footer"><span class="form-hint" id="api-status" role="status"><span>◌</span> GPT-6 Luna APIを確認中…</span><button class="primary-button" type="submit"><span>✦</span> 旅程をつくる <span class="button-arrow">↗</span></button></div>
           </form>
         </section>
 
         <section class="results-section" id="results" aria-live="polite">
-          <div class="results-heading"><div><div class="eyebrow"><span></span> YOUR ITINERARY</div><h2><span id="result-destination">京都</span>の旅程 <span class="generated-badge"><span>✦</span> PLAN READY</span></h2><p id="trip-summary">旅のリズムに合わせて、ちょうどいい予定を組みました。</p></div><div class="result-actions"><button class="icon-button" id="share-button" type="button" aria-label="旅程をコピー" title="旅程をコピー">↗</button><button class="save-button" id="save-button" type="button"><span>♡</span> 保存する</button></div></div>
+          <div class="results-heading"><div><div class="eyebrow"><span></span> YOUR ITINERARY</div><h2><span id="result-destination">旅程</span><span id="result-suffix"></span> <span class="generated-badge"><span>✦</span> PLAN READY</span></h2><p id="trip-summary">行き先と日程を決め、「旅程をつくる」を押してください。</p></div><div class="result-actions"><button class="icon-button" id="share-button" type="button" aria-label="旅程をコピー" title="旅程をコピー" disabled>↗</button><button class="save-button" id="save-button" type="button" disabled><span>♡</span> 保存する</button></div></div>
           <div class="trip-overview"><div class="overview-item"><span class="overview-icon">▦</span><div><small>旅行期間</small><strong id="overview-dates">—</strong></div></div><div class="overview-divider"></div><div class="overview-item"><span class="overview-icon peach">◷</span><div><small>旅の日数</small><strong id="overview-days">—</strong></div></div><div class="overview-divider"></div><div class="overview-item"><span class="overview-icon mint">⌖</span><div><small>旅のペース</small><strong id="overview-pace">ちょうどいい</strong></div></div><div class="overview-weather"><span>☼</span>天気・営業時間は現地で確認してください</div></div>
           <div class="day-tabs" id="day-tabs" role="tablist" aria-label="日程を選択"></div>
-          <div class="day-content" id="day-content"></div>
-          <div class="itinerary-note"><span>✧</span><div><strong>予定を自由にカスタマイズ。</strong><p>追加・編集・削除や並べ替えができます。移動時間や営業時間は目安なので、現地の情報もご確認ください。</p></div><button id="regenerate-button" type="button">↻　旅程を組み直す</button></div>
+          <div class="day-content" id="day-content"><p class="empty-day">旅程を作成すると、日ごとの予定がここに表示されます。</p></div>
+          <div class="itinerary-note"><span>✧</span><div><strong>予定を自由にカスタマイズ。</strong><p>追加・編集・削除や並べ替えができます。移動時間や営業時間は目安なので、現地の情報もご確認ください。</p></div><button id="regenerate-button" type="button" disabled>↻　旅程を組み直す</button></div>
         </section>
         <footer class="page-footer"><span>© 2026 tabi. Plan a little. Go a lot.</span><span>旅のしおりを、もっと自由に。</span></footer>
       </main>

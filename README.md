@@ -1,19 +1,21 @@
 # tabi. — 旅のスケジューラー
 
-行き先・旅行期間・旅のペース・興味のあることから、日ごとの旅程を自動で組むWebアプリです。旅程の追加・編集・削除、日程の追加・削除、並べ替え、ブラウザー内への保存、テキストコピーに対応しています。
+行き先・旅行期間・旅のペース・興味のあることから、OpenAI API（`gpt-6-luna`）で日ごとの旅程を自動生成するWebアプリです。旅程の追加・編集・削除、日程の追加・削除、並べ替え、ブラウザー内への保存、テキストコピーに対応しています。
 
 ## Dockerで起動
 
-Docker Desktopを起動して、プロジェクトのディレクトリで実行してください。
+Docker Desktopを起動し、`.env.example` を `.env` にコピーして `OPENAI_API_KEY` にOpenAI APIキーを設定してから、プロジェクトのディレクトリで実行してください。
 
 ```sh
-docker compose up --build
+cp .env.example .env
+# .env の OPENAI_API_KEY を設定
+docker compose -p tabi up --build -d
 ```
 
-ブラウザーで <http://localhost:8080> を開きます。ポートを変える場合は `PORT=3000 docker compose up --build` のように指定してください。
+ブラウザーで <http://localhost:8082> を開きます。`.env` はGitに登録されないため、APIキーが公開リポジトリに含まれることはありません。ポートを変える場合は `.env` の `PORT` を変更します。
 
-PowerShellの場合は `$env:PORT=3000; docker compose up --build` と実行します。
+PowerShellの場合、`.env` の作成は `Copy-Item .env.example .env` で行えます。
 
 ## 旅程の生成について
 
-京都・東京・大阪・台北・パリには、行き先別のスポット候補を用意しています。その他の入力では、街歩き・食事・文化などの汎用候補から旅程を作ります。旅程はアプリ内のルールに基づく提案で、リアルタイムの営業状況・天気・交通情報は取得しません。保存データはブラウザーのLocalStorageに保管されます。
+入力した行き先、日程、興味、旅のペースをOpenAI APIに送信して旅程を生成します。APIの利用料金はOpenAIアカウントに請求されます。リアルタイムの営業状況・天気・交通情報は取得しないため、予約や訪問前に現地情報を確認してください。保存データはブラウザーのLocalStorageに保管されます。
