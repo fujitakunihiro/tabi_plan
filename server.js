@@ -1,15 +1,21 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const http = require("node:http");
+const crypto = require("node:crypto");
 const initSqlJs = require("sql.js");
 
 const PORT = Number(process.env.PORT || 3000);
 const MODEL = process.env.OPENAI_MODEL || "gpt-6-luna";
 const API_KEY = process.env.OPENAI_API_KEY || "";
-const MAPS_API_KEY = process.env.GOOGLE_MAPS_API_KEY || "";
 const ROOT = __dirname;
 const DB_FILE = process.env.DB_PATH || path.join(ROOT, "data", "tabi.sqlite");
 let db;
+const routeEstimateCache = new Map();
+const geocodeCache = new Map();
+const roadCache = new Map();
+let nextGeocodeAt = 0;
+let geocodeQueue = Promise.resolve();
+const GEO_USER_AGENT = "tabi-plan/1.0 (https://github.com/fujitakunihiro/tabi_plan)";
 const files = new Map([
   ["/", ["index.html", "text/html; charset=utf-8"]],
   ["/index.html", ["index.html", "text/html; charset=utf-8"]],
@@ -43,8 +49,10 @@ const itinerarySchema = {
                 kind: { type: "string" },
                 duration: { type: "string" },
                 emoji: { type: "string" },
+                place: { type: "string" },
+                origin: { type: "string" },
               },
-              required: ["time", "name", "kind", "duration", "emoji"],
+              required: ["time", "name", "kind", "duration", "emoji", "place", "origin"],
             },
           },
         },
@@ -109,9 +117,12 @@ function setState(key, value) {
 }
 
 function listSavedTrips() {
-  const statement = db.prepare("SELECT value FROM itineraries ORDER BY updated_at DESC");
+  const statement = db.prepare("SELECT id, value FROM itineraries ORDER BY updated_at DESC");
   const trips = [];
-  while (statement.step()) trips.push(JSON.parse(statement.getAsObject().value));
+  while (statement.step()) {
+    const row = statement.getAsObject();
+    trips.push({ ...JSON.parse(row.value), id: row.id });
+  }
   statement.free();
   return trips;
 }
@@ -124,11 +135,12 @@ function validateStoredTrip(trip) {
 
 function saveStoredTrip(trip) {
   if (!validateStoredTrip(trip)) return false;
-  const id = `${trip.destination.trim()}|${trip.startDate}`;
-  const value = JSON.stringify({ ...trip, destination: trip.destination.trim() });
+  const id = typeof trip.id === "string" && trip.id.length > 0 && trip.id.length <= 160 ? trip.id : crypto.randomUUID();
+  const stored = { ...trip, id, destination: trip.destination.trim() };
+  const value = JSON.stringify(stored);
   db.run("INSERT INTO itineraries (id, destination, start_date, updated_at, value) VALUES (?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at, value = excluded.value", [id, trip.destination.trim(), trip.startDate, new Date().toISOString(), value]);
   persistDatabase();
-  return true;
+  return stored;
 }
 
 function initializeDatabase() {
@@ -166,10 +178,13 @@ async function createItinerary(req, res) {
     "あなたは日本語の旅行プランナーです。行き先、日付、ペース、興味に合わせて実用的なたたき台を作成してください。",
     "旅行日数と同じ日数だけ days を返し、各日の予定は時間順に並べてください。時刻は24時間表記のHH:MMにしてください。",
     "ゆったりは1日3件、ちょうどいいは1日4件、たっぷり満喫は1日5件を目安にしてください。食事や休憩、現実的な移動の余裕を含め、予定を詰め込みすぎないでください。",
+    "選択された移動手段に合わせて、予定名に移動が含まれる区間の所要時間を現実的に見積もってください。電車・バスは駅までの徒歩、待ち時間、乗換、車は駐車や道路状況の余裕も考慮し、その時間を予定の開始時刻と所要時間に反映してください。",
+    "各予定のplaceには施設名か地名だけを入れてください。移動予定ではplaceに到着地、originに出発地を入れ、通常の予定ではoriginを空文字にしてください。実在が曖昧な場所は地区名にしてください。",
     "興味に合う場所や体験を優先してください。よく知られた観光地は候補として提案できますが、実在を確信できない施設名、住所、営業時間、予約状況は作らないでください。確かな施設名がない場合は、地区や体験の種類を予定名にしてください。",
     "リアルタイムの天気、営業日、料金、交通、予約情報を確認したとは言わないでください。日本語で簡潔に書いてください。",
   ].join("\n");
-  const userInput = { destination: trip.destination.trim(), startDate: trip.startDate, endDate: trip.endDate, days: dayCount, pace: paceNames[trip.pace], interests: interestText };
+  const travelModeNames = { TRANSIT: "電車・バス", WALK: "徒歩", DRIVE: "車" };
+  const userInput = { destination: trip.destination.trim(), startDate: trip.startDate, endDate: trip.endDate, days: dayCount, pace: paceNames[trip.pace], interests: interestText, travelMode: travelModeNames[trip.travelMode] || travelModeNames.TRANSIT };
 
   let upstream;
   try {
@@ -215,43 +230,195 @@ async function createItinerary(req, res) {
   }
 }
 
-function formatRouteAddress(name, destination) {
-  return `${name.trim()}, ${destination.trim()}`;
-}
+async function estimateRoutesWithAI(destination, events) {
+  const cacheKey = JSON.stringify([destination.trim().toLocaleLowerCase("ja"), events.map((event) => [event.name, event.kind || "", event.duration || "", event.place || "", event.origin || ""].map((value) => value.trim().toLocaleLowerCase("ja")))]);
+  const cached = routeEstimateCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return cached.estimates;
+  if (cached) routeEstimateCache.delete(cacheKey);
+  if (!API_KEY) throw new Error("移動時間の概算には .env の OPENAI_API_KEY が必要です。");
 
-function isPreciseWaypoint(result) {
-  if (!result || result.geocoderStatus?.code !== "OK" || result.partialMatch) return false;
-  const broadTypes = new Set(["country", "locality", "political", "route", "postal_code", "administrative_area_level_1", "administrative_area_level_2"]);
-  return Array.isArray(result.type) && result.type.length > 0 && !result.type.every((type) => broadTypes.has(type));
-}
-
-async function getGoogleRoute(destination, originEvent, targetEvent, travelMode) {
-  const request = {
-    origin: { address: formatRouteAddress(originEvent.name, destination) },
-    destination: { address: formatRouteAddress(targetEvent.name, destination) },
-    travelMode,
-    languageCode: "ja",
-    units: "METRIC",
+  const schema = {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      segments: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            index: { type: "integer" },
+            transitMinutes: { type: "integer" },
+            walkMinutes: { type: "integer" },
+            driveMinutes: { type: "integer" },
+          },
+          required: ["index", "transitMinutes", "walkMinutes", "driveMinutes"],
+        },
+      },
+      transfers: {
+        type: "array",
+        items: {
+          type: "object", additionalProperties: false,
+          properties: { index: { type: "integer" }, transitMinutes: { type: "integer" }, walkMinutes: { type: "integer" }, driveMinutes: { type: "integer" } },
+          required: ["index", "transitMinutes", "walkMinutes", "driveMinutes"],
+        },
+      },
+    },
+    required: ["segments", "transfers"],
   };
-  if (travelMode === "DRIVE") request.routingPreference = "TRAFFIC_AWARE";
-  if (travelMode === "TRANSIT") request.transitPreferences = { routingPreference: "LESS_WALKING" };
-  const response = await fetch("https://routes.googleapis.com/directions/v2:computeRoutes", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-Goog-Api-Key": MAPS_API_KEY, "X-Goog-FieldMask": "routes.duration,routes.distanceMeters,geocodingResults.origin,geocodingResults.destination" },
-    body: JSON.stringify(request),
-    signal: AbortSignal.timeout(25000),
-  });
-  if (!response.ok) throw new Error("Google Maps Routes API request failed");
-  const data = await response.json();
-  const geocoding = data.geocodingResults;
-  const route = data.routes?.[0];
-  const seconds = Number.parseInt(route?.duration || "", 10);
-  if (!route || !isPreciseWaypoint(geocoding?.origin) || !isPreciseWaypoint(geocoding?.destination) || !Number.isFinite(seconds)) {
-    return { available: false, reason: "場所を特定できません" };
+  const instructions = [
+    "あなたは旅行の移動時間を概算するアシスタントです。地図、経路検索、時刻表、リアルタイム情報は使わず、場所の一般知識から控えめな目安を出してください。",
+    "入力された順番で各予定間の移動時間を分単位で推定し、電車・バス、徒歩、車の3種類を返してください。場所同士が近い場合と離れている場合の差を反映し、すべての区間を同じ値にそろえないでください。",
+    "各区間の基本的な移動所要時間を見積もってください。駅までの徒歩、待ち時間、乗換、駐車などの余裕時間はアプリ側で別に加算します。",
+    "予定名・種類に「移動」や「戻る」とあり、その予定の所要時間に長距離移動が含まれている場合は、その移動を隣の区間でも二重に加算しないでください。到着後または出発前の近距離移動だけを見積もってください。予定の種類と所要時間を考慮してください。",
+    "移動そのものが予定になっている場合、transfersにその予定のindexと、3つの移動手段ごとの予定全体の所要分数を返してください。通常の観光・食事予定はtransfersに含めないでください。",
+    "正確な場所や距離が分からない場合は、行き先の市街地内の一般的な目安を出してください。根拠のない距離や経路、乗換、時刻表を作らないでください。各値は5〜240分の整数にしてください。",
+  ].join("\n");
+  let response;
+  try {
+    response = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${API_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: MODEL,
+        instructions,
+        input: JSON.stringify({ destination, events, segments: events.slice(1).map((event, index) => ({ index, from: events[index], to: event })) }),
+        text: { format: { type: "json_schema", name: "approximate_travel_times", strict: true, schema } },
+        max_output_tokens: 2000,
+      }),
+      signal: AbortSignal.timeout(45000),
+    });
+  } catch {
+    throw new Error("移動時間の概算を作れませんでした。ネットワークを確認して再度お試しください。");
   }
-  const result = { available: true, durationSeconds: seconds, distanceMeters: route.distanceMeters };
-  routeCache.set(cacheKey, { result, expiresAt: Date.now() + 10 * 60 * 1000 });
-  return result;
+  if (!response.ok) {
+    const message = response.status === 401 ? "OpenAI APIキーを確認してください。"
+      : response.status === 429 ? "OpenAI APIの利用上限に達したか、混み合っています。時間をおいて再度お試しください。"
+        : "AIによる移動時間の概算を作れませんでした。時間をおいて再度お試しください。";
+    throw new Error(message);
+  }
+  const result = JSON.parse(getOutputText(await response.json()));
+  if (!Array.isArray(result.segments) || result.segments.length !== events.length - 1 || !Array.isArray(result.transfers)) throw new Error("移動時間の概算結果が不完全でした。もう一度お試しください。");
+  const estimates = result.segments.map((segment, index) => {
+    if (segment.index !== index || ![segment.transitMinutes, segment.walkMinutes, segment.driveMinutes].every((minutes) => Number.isInteger(minutes) && minutes >= 5 && minutes <= 240)) {
+      throw new Error("移動時間の概算結果を読み取れませんでした。もう一度お試しください。");
+    }
+    return {
+      index,
+      estimates: {
+        TRANSIT: Math.min(240, segment.transitMinutes + 15),
+        WALK: Math.min(240, segment.walkMinutes + 5),
+        DRIVE: Math.min(240, segment.driveMinutes + 10),
+      },
+    };
+  });
+  if (routeEstimateCache.size >= 100) routeEstimateCache.delete(routeEstimateCache.keys().next().value);
+  const transfers = result.transfers.filter((item) => Number.isInteger(item.index) && item.index >= 0 && item.index < events.length)
+    .map((item) => ({ index: item.index, estimates: { TRANSIT: item.transitMinutes, WALK: item.walkMinutes, DRIVE: item.driveMinutes }, source: "ai" }))
+    .filter((item) => Object.values(item.estimates).every((minutes) => Number.isInteger(minutes) && minutes >= 5 && minutes <= 1440));
+  const answer = { segments: estimates.map((item) => ({ ...item, source: "ai" })), transfers };
+  routeEstimateCache.set(cacheKey, { estimates: answer, expiresAt: Date.now() + 30 * 60 * 1000 });
+  return answer;
+}
+
+function eventPlace(event, destination) {
+  if (event.place?.trim()) return event.place.trim();
+  const title = event.name.trim();
+  const returnPlace = title.split(/[、,]/).at(-1).match(/^(.+?)へ戻る/);
+  if (returnPlace) return returnPlace[1].trim();
+  const movement = title.match(/(?:から|より)(.+?)(?:へ|に)(?:移動|戻る|向かう)/);
+  if (movement) return movement[1].trim();
+  const cleaned = title.split(/[・、（(]/)[0].replace(/(?:周辺|付近)?(?:で|を|に).+$/, "").replace(/(?:へ移動|に移動|を散策|を見学|を鑑賞|で昼食|で夕食|で休憩)$/, "").trim();
+  return cleaned && cleaned.length <= 50 ? cleaned : destination;
+}
+
+function eventOrigin(event) {
+  if (event.origin?.trim()) return event.origin.trim();
+  return event.name.match(/^(.+?)(?:から|より).+?(?:へ|に)(?:移動|戻る|向かう)/)?.[1]?.trim() || "";
+}
+
+async function geocode(place, destination) {
+  if (!place || /^(?:昼食|夕食|食事|休憩|自由時間|散策|観光)$/.test(place)) return null;
+  const query = place;
+  const key = query.toLocaleLowerCase("ja");
+  if (geocodeCache.has(key)) return geocodeCache.get(key);
+  const work = geocodeQueue.catch(() => {}).then(async () => {
+    if (geocodeCache.has(key)) return geocodeCache.get(key);
+    const delay = Math.max(0, nextGeocodeAt - Date.now());
+    if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
+    nextGeocodeAt = Date.now() + 1100;
+    try {
+      const url = new URL("https://nominatim.openstreetmap.org/search");
+      url.searchParams.set("q", query);
+      url.searchParams.set("format", "jsonv2");
+      url.searchParams.set("limit", "1");
+      const response = await fetch(url, { headers: { "User-Agent": GEO_USER_AGENT, "Accept-Language": "ja" }, signal: AbortSignal.timeout(8000) });
+      if (!response.ok) return null;
+      const result = (await response.json())[0];
+      const coordinate = result && { lat: Number(result.lat), lon: Number(result.lon) };
+      if (!coordinate || !Number.isFinite(coordinate.lat) || !Number.isFinite(coordinate.lon)) return null;
+      geocodeCache.set(key, coordinate);
+      return coordinate;
+    } catch { return null; }
+  });
+  geocodeQueue = work;
+  return work;
+}
+
+function distanceKm(a, b) {
+  const rad = Math.PI / 180;
+  const lat = (b.lat - a.lat) * rad;
+  const lon = (b.lon - a.lon) * rad;
+  const x = Math.sin(lat / 2) ** 2 + Math.cos(a.lat * rad) * Math.cos(b.lat * rad) * Math.sin(lon / 2) ** 2;
+  return 6371 * 2 * Math.asin(Math.min(1, Math.sqrt(x)));
+}
+
+async function roadEstimate(a, b) {
+  const key = `${a.lon},${a.lat};${b.lon},${b.lat}`;
+  if (roadCache.has(key)) return roadCache.get(key);
+  try {
+    const response = await fetch(`https://router.project-osrm.org/route/v1/driving/${key}?overview=false`, { headers: { "User-Agent": GEO_USER_AGENT }, signal: AbortSignal.timeout(8000) });
+    const result = response.ok ? await response.json() : null;
+    const route = result?.routes?.[0];
+    if (!route || !Number.isFinite(route.duration) || !Number.isFinite(route.distance)) return null;
+    const estimate = { km: route.distance / 1000, driveMinutes: Math.ceil(route.duration / 60) };
+    roadCache.set(key, estimate);
+    return estimate;
+  } catch { return null; }
+}
+
+function minutesFromLocation(a, b, road, transfer = false) {
+  const direct = distanceKm(a, b);
+  const km = road?.km || direct * 1.3;
+  const drive = road?.driveMinutes || km / 35 * 60;
+  const buffer = transfer ? 20 : 10;
+  return {
+    TRANSIT: Math.max(5, Math.ceil(km / 30 * 60 + (transfer ? 30 : 20))),
+    WALK: Math.max(5, Math.ceil(direct * 1.25 / 4.5 * 60 + (transfer ? 10 : 5))),
+    DRIVE: Math.max(5, Math.ceil(drive + buffer)),
+  };
+}
+
+async function estimateFromLocations(destination, events) {
+  const positions = await Promise.all(events.map((event) => geocode(eventPlace(event, destination), destination)));
+  const origins = await Promise.all(events.map((event) => {
+    const origin = eventOrigin(event);
+    return origin ? geocode(origin, destination) : Promise.resolve(null);
+  }));
+  const segments = [];
+  const transfers = [];
+  for (let index = 0; index < events.length; index++) {
+    if (index > 0 && positions[index - 1] && (origins[index] || positions[index])) {
+      const from = positions[index - 1], to = origins[index] || positions[index];
+      const road = await roadEstimate(from, to);
+      segments.push({ index: index - 1, estimates: minutesFromLocation(from, to, road), source: road ? "road" : "distance" });
+    }
+    if (origins[index] && positions[index]) {
+      const road = await roadEstimate(origins[index], positions[index]);
+      transfers.push({ index, estimates: minutesFromLocation(origins[index], positions[index], road, true), source: road ? "road" : "distance" });
+    }
+  }
+  return { segments, transfers };
 }
 
 async function getRouteEstimates(req, res) {
@@ -264,16 +431,24 @@ async function getRouteEstimates(req, res) {
   if (typeof input.destination !== "string" || !input.destination.trim() || input.destination.length > 80 || !Array.isArray(input.events) || input.events.length > 21 || !["TRANSIT", "WALK", "DRIVE"].includes(input.travelMode)) {
     return sendJSON(res, 400, { error: "経路検索の条件を確認してください。" });
   }
-  if (!MAPS_API_KEY) return sendJSON(res, 200, { configured: false, segments: [] });
-  if (input.events.some((event) => !event || typeof event.name !== "string" || !event.name.trim() || event.name.length > 160)) return sendJSON(res, 400, { error: "予定名を確認してください。" });
-  const segments = await Promise.all(input.events.slice(1).map(async (event, index) => {
-    try {
-      return { index, ...await getGoogleRoute(input.destination, input.events[index], event, input.travelMode) };
-    } catch {
-      return { index, available: false, reason: "経路を取得できません" };
+  if (input.events.some((event) => !event || typeof event.name !== "string" || !event.name.trim() || event.name.length > 160
+    || (event.kind !== undefined && (typeof event.kind !== "string" || event.kind.length > 100))
+    || (event.duration !== undefined && (typeof event.duration !== "string" || event.duration.length > 40))
+    || (event.place !== undefined && (typeof event.place !== "string" || event.place.length > 100))
+    || (event.origin !== undefined && (typeof event.origin !== "string" || event.origin.length > 100)))) return sendJSON(res, 400, { error: "予定名・場所・所要時間を確認してください。" });
+  try {
+    const locations = await estimateFromLocations(input.destination, input.events);
+    let ai = { segments: [], transfers: [] };
+    if ((locations.segments.length < input.events.length - 1 || locations.transfers.length < input.events.filter((event) => eventOrigin(event)).length) && API_KEY) {
+      try { ai = await estimateRoutesWithAI(input.destination, input.events); } catch (error) { if (!locations.segments.length && !locations.transfers.length) throw error; }
     }
-  }));
-  return sendJSON(res, 200, { configured: true, travelMode: input.travelMode, segments });
+    const segments = input.events.slice(1).map((_, index) => locations.segments.find((item) => item.index === index) || ai.segments.find((item) => item.index === index) || { index, available: false, reason: "場所を特定できません" })
+      .map((item) => ({ ...item, available: item.available !== false, estimated: true }));
+    const transfers = [...locations.transfers, ...ai.transfers.filter((item) => !locations.transfers.some((found) => found.index === item.index))];
+    return sendJSON(res, 200, { estimated: true, travelMode: input.travelMode, segments, transfers });
+  } catch (error) {
+    return sendJSON(res, 502, { error: error.message || "移動時間の概算を作成できませんでした。" });
+  }
 }
 
 const server = http.createServer(async (req, res) => {
@@ -292,21 +467,21 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname === "/api/storage/saved" && req.method === "POST") {
     try {
       const body = await readJSON(req, 1024 * 1024);
-      if (!saveStoredTrip(body.trip)) return sendJSON(res, 400, { error: "保存する旅程の内容を確認してください。" });
-      return sendJSON(res, 200, { saved: listSavedTrips() });
+      const stored = saveStoredTrip(body.trip);
+      if (!stored) return sendJSON(res, 400, { error: "保存する旅程の内容を確認してください。" });
+      return sendJSON(res, 200, { trip: stored, saved: listSavedTrips() });
     } catch (error) {
       return sendJSON(res, error.message === "request_too_large" ? 413 : 400, { error: "旅程を保存できませんでした。" });
     }
   }
   if (url.pathname === "/api/storage/saved" && req.method === "DELETE") {
-    const destination = url.searchParams.get("destination");
-    const startDate = url.searchParams.get("startDate");
-    if (!destination || !isRealDate(startDate)) return sendJSON(res, 400, { error: "削除する旅程を特定できません。" });
-    db.run("DELETE FROM itineraries WHERE id = ?", [`${destination}|${startDate}`]);
+    const id = url.searchParams.get("id");
+    if (!id || id.length > 160) return sendJSON(res, 400, { error: "削除する旅程を特定できません。" });
+    db.run("DELETE FROM itineraries WHERE id = ?", [id]);
     persistDatabase();
     return sendJSON(res, 200, { saved: listSavedTrips() });
   }
-  if (url.pathname === "/api/status" && req.method === "GET") return sendJSON(res, 200, { configured: Boolean(API_KEY), mapsConfigured: Boolean(MAPS_API_KEY), model: MODEL });
+  if (url.pathname === "/api/status" && req.method === "GET") return sendJSON(res, 200, { configured: Boolean(API_KEY), model: MODEL });
   if (url.pathname === "/api/itinerary" && req.method === "POST") return createItinerary(req, res);
   if (url.pathname === "/api/routes" && req.method === "POST") return getRouteEstimates(req, res);
   if (req.method !== "GET" && req.method !== "HEAD") {
