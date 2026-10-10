@@ -3,7 +3,7 @@ const path = require("node:path");
 const http = require("node:http");
 const crypto = require("node:crypto");
 const initSqlJs = require("sql.js");
-const { lookupOfficialSites } = require("./website-search");
+const { lookupOfficialSites, searchedURLs, safeWebsiteURL } = require("./website-search");
 const { createGeocoder, distanceKm, isReasonableRoad } = require("./route-locations");
 const { travelRange, durationMinutes } = require("./itinerary-utils");
 
@@ -41,6 +41,22 @@ const itinerarySchema = {
         additionalProperties: false,
         properties: {
           summary: { type: "string" },
+          foodRecommendations: {
+            type: "array",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                name: { type: "string" },
+                specialty: { type: "string" },
+                place: { type: "string" },
+                nearbyTo: { type: "string" },
+                reason: { type: "string" },
+                url: { type: "string" },
+              },
+              required: ["name", "specialty", "place", "nearbyTo", "reason", "url"],
+            },
+          },
           events: {
             type: "array",
             items: {
@@ -60,7 +76,7 @@ const itinerarySchema = {
             },
           },
         },
-        required: ["summary", "events"],
+        required: ["summary", "events", "foodRecommendations"],
       },
     },
   },
@@ -191,6 +207,7 @@ async function createItinerary(req, res) {
     "各予定のplaceには施設名か地名だけを入れてください。移動予定ではplaceに到着地、originに出発地を入れ、通常の予定ではoriginを空文字にしてください。実在が曖昧な場所は地区名にしてください。",
     "journeyRoleは出発地からの往路をoutbound、出発地への帰路をreturn、それ以外の予定をlocalにしてください。往路と帰路は独立した移動予定にしてください。",
     "興味に合う場所や体験を優先してください。よく知られた観光地は候補として提案できますが、実在を確信できない施設名、住所、営業時間、予約状況は作らないでください。確かな施設名がない場合は、地区や体験の種類を予定名にしてください。",
+    "グルメが興味に含まれる場合はweb_searchで調べ、各日のfoodRecommendationsに名物料理・地元で評判の店を3件ずつ提案してください。その日の観光予定から立ち寄りやすい実在店舗を選び、店名、名物、近くの観光予定、選んだ理由を具体的に書いてください。placeには店舗の正式名称と市区町村・エリアを入れ、nearbyToにはその日に訪れる近くの観光地を入れてください。urlは検索結果に実際に含まれる店舗公式サイト、自治体または公式観光協会のページのURLだけをそのまま記入してください。確認できる出典URLがない候補は出さないでください。営業時間や営業日、予約可否は断定しないでください。グルメが選ばれていない場合はfoodRecommendationsを空配列にしてください。",
     "リアルタイムの天気、営業日、料金、交通、予約情報を確認したとは言わないでください。日本語で簡潔に書いてください。",
   ].join("\n");
   const travelModeNames = { TRANSIT: "電車・バス", WALK: "徒歩", DRIVE: "車" };
@@ -205,6 +222,7 @@ async function createItinerary(req, res) {
         model: MODEL,
         instructions,
         input: JSON.stringify(userInput),
+        ...(trip.interests.includes("food") ? { tools: [{ type: "web_search" }], tool_choice: "required", include: ["web_search_call.action.sources"] } : {}),
         text: { format: { type: "json_schema", name: "travel_itinerary", strict: true, schema: itinerarySchema } },
         max_output_tokens: 8000,
       }),
@@ -227,11 +245,25 @@ async function createItinerary(req, res) {
     const response = await upstream.json();
     const result = JSON.parse(getOutputText(response));
     if (!Array.isArray(result.days) || result.days.length !== dayCount) throw new Error("invalid_day_count");
+    const sourceURLs = trip.interests.includes("food") ? searchedURLs(response) : new Set();
     for (const day of result.days) {
       if (!Array.isArray(day.events) || day.events.length < 1 || day.events.length > 8) throw new Error("invalid_event_count");
       for (const event of day.events) {
         if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(event.time) || !event.name.trim()) throw new Error("invalid_event");
       }
+      if (!Array.isArray(day.foodRecommendations)) throw new Error("invalid_food_recommendations");
+      const seen = new Set();
+      day.foodRecommendations = day.foodRecommendations.filter((item) => {
+        if (!item || ["name", "specialty", "place", "nearbyTo", "reason"].some((key) => typeof item[key] !== "string" || !item[key].trim())
+          || ["name", "specialty", "place", "nearbyTo", "reason"].some((key) => item[key].length > 160)) return false;
+        const url = safeWebsiteURL(item.url);
+        if (!url || !sourceURLs.has(url)) return false;
+        const normalized = item.name.trim().toLocaleLowerCase("ja");
+        if (seen.has(normalized)) return false;
+        seen.add(normalized);
+        item.url = url;
+        return true;
+      }).slice(0, 3);
     }
     return sendJSON(res, 200, result);
   } catch (error) {

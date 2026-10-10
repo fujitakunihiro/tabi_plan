@@ -30,5 +30,22 @@
     trip.days.forEach((day,index)=>{const date=new Date(`${trip.startDate}T12:00:00`);date.setDate(date.getDate()+index);day.date=date;delete day.routeData;delete day.scheduleIssues;day.summary=String(day.summary||"").replace(/^\d{1,2}月\d{1,2}日(?:[（(][^）)]*[）)])?\s*[｜|]\s*/,"")});
     const last=trip.days.at(-1).date;trip.endDate=`${last.getFullYear()}-${String(last.getMonth()+1).padStart(2,"0")}-${String(last.getDate()).padStart(2,"0")}`;return true;
   }
-  return {clockMinutes,durationMinutes,clockLabel,durationLabel,travelRange,travelLabel,scheduleDay,applyRoutes,recalculateDays,journeyRole,removeDay};
+  function mealEvents(day){return (day.events||[]).filter(event=>!event.origin&&!['outbound','return'].includes(event.journeyRole)&&/食事|グルメ|昼食|夕食|朝食|ランチ|ディナー|カフェ/.test(`${event.name} ${event.kind}`))}
+  function foodPickKey(pick){return JSON.stringify([pick.name.trim(),pick.place.trim()])}
+  function foodPickEvent(day,pick){return (day.events||[]).find(event=>event.foodRecommendationKey===foodPickKey(pick)||event.name===pick.name&&event.place===pick.place)}
+  function applyFoodRecommendation(day,pick,{targetId='',time='12:00',id,mode='TRANSIT'}={}){
+    if(!pick||typeof pick.name!=='string'||!pick.name.trim()||typeof pick.place!=='string'||!pick.place.trim())return {error:'候補のお店を確認してください。'};
+    if(day.events.some(event=>event.editing))return {error:'予定の編集を保存してからお店を選んでください。'};
+    if(foodPickEvent(day,pick))return {error:'このお店はすでに予定に入っています。',duplicate:true};
+    const target=targetId?mealEvents(day).find(event=>event.id===targetId):null;
+    if(targetId&&!target)return {error:'入れ替える食事予定を選び直してください。'};
+    if(!target&&(clockMinutes(time)===null||!id))return {error:'追加する時刻を確認してください。'};
+    const place=(pick.place.includes(pick.name)?pick.place:`${pick.name} ${pick.place}`).trim().slice(0,100);
+    const fields={name:pick.name.trim(),place,kind:`グルメ · ${pick.specialty}`,emoji:'🍽️',origin:'',journeyRole:'local',foodRecommendationKey:foodPickKey(pick),foodSourceURL:pick.url};
+    const event=target||{id,time,scheduleBaseTime:time,duration:'約1時間',durationMode:mode};
+    Object.assign(event,fields);delete event.officialWebsite;
+    if(!target){day.events.push(event);day.events.sort((a,b)=>(clockMinutes(a.time)||0)+Number(a.dayOffset||0)*1440-(clockMinutes(b.time)||0)-Number(b.dayOffset||0)*1440)}
+    delete day.routeData;delete day.scheduleIssues;return {event,replaced:Boolean(target)};
+  }
+  return {clockMinutes,durationMinutes,clockLabel,durationLabel,travelRange,travelLabel,scheduleDay,applyRoutes,recalculateDays,journeyRole,removeDay,mealEvents,foodPickEvent,applyFoodRecommendation};
 });
