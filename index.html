@@ -6,13 +6,15 @@
     <meta name="theme-color" content="#f7f7f3" />
     <meta name="description" content="行き先と日程から、あなたにぴったりの旅程を自動でつくる旅行スケジューラー。" />
     <title>tabi. — 旅のスケジューラー</title>
-    <link rel="stylesheet" href="/styles.css?v=13" />
-    <script src="/app.js?v=11" defer></script>
+    <link rel="stylesheet" href="/styles.css?v=15" />
+    <script src="/itinerary-utils.js?v=1" defer></script>
+    <script src="/app.js?v=14" defer></script>
   </head>
   <body>
     <div class="app-shell">
       <aside class="sidebar">
         <a class="brand" href="#top" aria-label="tabi ホーム"><span class="brand-mark">t.</span><span>tabi<span class="brand-dot">.</span></span></a>
+        <button class="mobile-saved-button" id="mobile-saved-nav" type="button">保存した旅 <span id="mobile-saved-count">0</span></button>
         <div class="sidebar-label">WORKSPACE</div>
         <nav class="side-nav" aria-label="メインナビゲーション">
           <a class="nav-link active" href="#planner"><span class="nav-icon">▦</span>旅程をつくる</a>
@@ -29,17 +31,18 @@
         <section class="page-intro" id="planner">
           <div class="eyebrow"><span></span> YOUR NEXT ADVENTURE</div>
           <h1>次の旅を、<em>ちょうどよく。</em></h1>
-          <p>行き先・日程・好みからGPT-6 Lunaが旅程を提案。予定はあとから自由に編集できます。</p>
+          <p>どこから、どこへ。出発地・日程・好みから旅程を提案。予定はあとから自由に編集できます。</p>
         </section>
 
         <section class="planner-card" aria-label="旅程の条件">
           <form id="planner-form">
             <div class="form-topline"><div><span class="step-number">01</span><span class="form-heading">旅の条件を設定</span></div><span class="required-note"><i>*</i> 必須項目</span></div>
             <div class="form-grid">
+              <label class="field departure-field"><span class="field-label">どこから（出発地） <span class="optional">任意</span></span><span class="input-wrap"><span class="field-icon">↗</span><input id="departure-point" name="departurePoint" maxlength="100" placeholder="例：東京駅、横浜市" autocomplete="off" /></span></label>
               <label class="field destination-field"><span class="field-label">行き先 <i>*</i></span><span class="input-wrap"><span class="field-icon">⌖</span><input id="destination" name="destination" required placeholder="例：京都、台北、パリ" autocomplete="off" value="京都" /><span class="input-suffix">✦</span></span></label>
               <label class="field"><span class="field-label">出発日 <i>*</i></span><span class="input-wrap"><span class="field-icon">▦</span><input id="start-date" name="startDate" type="date" required /></span></label>
               <label class="field"><span class="field-label">帰着日 <i>*</i></span><span class="input-wrap"><span class="field-icon">▦</span><input id="end-date" name="endDate" type="date" required /></span></label>
-              <label class="field"><span class="field-label">旅のペース</span><span class="select-wrap"><span class="field-icon">◷</span><select id="pace" name="pace"><option value="relaxed">ゆったり</option><option value="balanced" selected>ちょうどいい</option><option value="active">たっぷり満喫</option></select><span class="select-arrow">⌄</span></span></label>
+              <label class="field pace-field"><span class="field-label">旅のペース</span><span class="select-wrap"><span class="field-icon">◷</span><select id="pace" name="pace"><option value="relaxed">ゆったり</option><option value="balanced" selected>ちょうどいい</option><option value="active">たっぷり満喫</option></select><span class="select-arrow">⌄</span></span></label>
             </div>
             <div class="interest-row"><span class="field-label">好きなこと <span class="optional">複数選択できます</span></span><div class="chips" id="interest-chips">
               <label class="chip selected"><input type="checkbox" value="culture" checked /><span>◈</span>文化・歴史</label>
@@ -57,6 +60,7 @@
           <div class="trip-overview"><div class="overview-item"><span class="overview-icon">▦</span><div><small>旅行期間</small><strong id="overview-dates">—</strong></div></div><div class="overview-divider"></div><div class="overview-item"><span class="overview-icon peach">◷</span><div><small>旅の日数</small><strong id="overview-days">—</strong></div></div><div class="overview-divider"></div><div class="overview-item"><span class="overview-icon mint">⌖</span><div><small>旅のペース</small><strong id="overview-pace">ちょうどいい</strong></div></div><div class="overview-weather"><span>☼</span>天気・営業時間は現地で確認してください</div></div>
           <div class="day-tabs" id="day-tabs" role="tablist" aria-label="日程を選択"></div>
           <div class="route-toolbar"><label for="route-mode">移動手段<select id="route-mode"><option value="TRANSIT">電車・バス</option><option value="WALK">徒歩</option><option value="DRIVE">車</option></select></label><span id="route-status" role="status">地点と道路距離から移動時間の概算を計算します。時刻表は使いません。</span><span class="route-credit"><a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">© OpenStreetMap contributors</a> / <a href="https://project-osrm.org/" target="_blank" rel="noopener noreferrer">OSRM</a></span></div>
+          <button class="route-retry" id="route-retry" type="button" hidden>全日程を再計算</button>
           <div class="day-content" id="day-content"><p class="empty-day">旅程を作成すると、日ごとの予定がここに表示されます。</p></div>
           <div class="itinerary-note"><span>✧</span><div><strong>予定を自由にカスタマイズ。</strong><p>下書きは自動でデータベースに保存されます。「保存する」で旅程を保存できます。予定の追加・編集・削除や並べ替えもできます。</p></div><button id="regenerate-button" type="button" disabled>↻　旅程を組み直す</button></div>
         </section>
@@ -66,6 +70,7 @@
     <dialog class="saved-dialog" id="saved-dialog" aria-labelledby="saved-dialog-title">
       <div class="saved-dialog-heading"><div><small>YOUR TRIPS</small><h2 id="saved-dialog-title">保存した旅</h2></div><button class="saved-dialog-close" id="saved-dialog-close" type="button" aria-label="閉じる">×</button></div>
       <p class="saved-dialog-caption">旅程を選ぶと、予定の編集を続けられます。</p>
+      <div class="saved-view-tabs"><button id="saved-view-active" type="button" aria-pressed="true">保存した旅</button><button id="saved-view-deleted" type="button" aria-pressed="false">削除した旅</button></div>
       <div class="saved-trip-list" id="saved-trip-list"></div>
       <p class="saved-dialog-empty" id="saved-dialog-empty" hidden>保存した旅程はまだありません。</p>
     </dialog>
