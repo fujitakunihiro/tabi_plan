@@ -1,4 +1,13 @@
 (function(root,factory){const api=factory();if(typeof module==="object"&&module.exports)module.exports=api;else root.TabiSchedule=api})(typeof globalThis!=="undefined"?globalThis:this,function(){
+  function createId(){
+    const source=globalThis.crypto;
+    if(typeof source?.randomUUID==="function")return source.randomUUID();
+    // HTTP access through a VPN supports getRandomValues even when randomUUID is unavailable.
+    const bytes=source.getRandomValues(new Uint8Array(16));
+    bytes[6]=(bytes[6]&0x0f)|0x40;bytes[8]=(bytes[8]&0x3f)|0x80;
+    const hex=Array.from(bytes,value=>value.toString(16).padStart(2,"0")).join("");
+    return `${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20)}`;
+  }
   function clockMinutes(value){const match=/^(\d{1,2}):(\d{2})$/.exec(String(value||""));return match&&Number(match[1])<24&&Number(match[2])<60?Number(match[1])*60+Number(match[2]):null}
   function durationMinutes(value){const text=String(value||"");return Number(text.match(/(\d+)\s*日/)?.[1]||0)*1440+Number(text.match(/(\d+)\s*時間/)?.[1]||0)*60+Number(text.match(/(\d+)\s*分/)?.[1]||0)}
   function clockLabel(minutes){const days=Math.floor(minutes/1440),within=minutes%1440;return `${days===1?"翌日 ":days>1?`${days}日後 `:""}${String(Math.floor(within/60)).padStart(2,"0")}:${String(within%60).padStart(2,"0")}`}
@@ -47,5 +56,5 @@
     if(!target){day.events.push(event);day.events.sort((a,b)=>(clockMinutes(a.time)||0)+Number(a.dayOffset||0)*1440-(clockMinutes(b.time)||0)-Number(b.dayOffset||0)*1440)}
     delete day.routeData;delete day.scheduleIssues;return {event,replaced:Boolean(target)};
   }
-  return {clockMinutes,durationMinutes,clockLabel,durationLabel,travelRange,travelLabel,scheduleDay,applyRoutes,recalculateDays,journeyRole,removeDay,mealEvents,foodPickEvent,applyFoodRecommendation};
+  return {createId,clockMinutes,durationMinutes,clockLabel,durationLabel,travelRange,travelLabel,scheduleDay,applyRoutes,recalculateDays,journeyRole,removeDay,mealEvents,foodPickEvent,applyFoodRecommendation};
 });
