@@ -6,9 +6,9 @@
     <meta name="theme-color" content="#f7f7f3" />
     <meta name="description" content="行き先と日程から、あなたにぴったりの旅程を自動でつくる旅行スケジューラー。" />
     <title>tabi. — 旅のスケジューラー</title>
-    <link rel="stylesheet" href="/styles.css?v=17" />
+    <link rel="stylesheet" href="/styles.css?v=20" />
     <script src="/itinerary-utils.js?v=3" defer></script>
-    <script src="/app.js?v=17" defer></script>
+    <script src="/app.js?v=20" defer></script>
   </head>
   <body>
     <div class="app-shell">
@@ -36,7 +36,7 @@
 
         <section class="planner-card" aria-label="旅程の条件">
           <form id="planner-form">
-            <div class="form-topline"><div><span class="step-number">01</span><span class="form-heading">旅の条件を設定</span></div><span class="required-note"><i>*</i> 必須項目</span></div>
+            <div class="form-topline"><div class="planner-heading-row"><div><span class="step-number">01</span><span class="form-heading">旅の条件を設定</span></div><div class="planner-heading-actions"><span class="required-note"><i>*</i> 必須項目</span><button class="new-trip-button" id="start-new-trip" type="button">＋ 新しい旅程</button></div></div></div>
             <div class="form-grid">
               <label class="field departure-field"><span class="field-label">どこから（出発地） <span class="optional">任意</span></span><span class="input-wrap"><span class="field-icon">↗</span><input id="departure-point" name="departurePoint" maxlength="100" placeholder="例：東京駅、横浜市" autocomplete="off" /></span></label>
               <label class="field destination-field"><span class="field-label">行き先 <i>*</i></span><span class="input-wrap"><span class="field-icon">⌖</span><input id="destination" name="destination" required placeholder="例：京都、台北、パリ" autocomplete="off" value="京都" /><span class="input-suffix">✦</span></span></label>
@@ -51,6 +51,12 @@
               <label class="chip"><input type="checkbox" value="shopping" /><span>◇</span>ショッピング</label>
               <label class="chip"><input type="checkbox" value="art" /><span>◉</span>アート</label>
             </div></div>
+            <section class="destination-discovery" aria-labelledby="destination-discovery-title">
+              <div class="discovery-heading"><div><h2 id="destination-discovery-title">日程から、行き先を探す。</h2><p>まだ決まっていなくても大丈夫。季節・日数・好みに合う候補をご提案。</p></div></div>
+              <div class="discovery-controls"><label for="destination-scope">旅の範囲<select id="destination-scope"><option value="domestic">日本国内</option><option value="overseas">海外</option></select></label><button id="suggest-destinations-button" type="button">日程からおすすめを見る <span aria-hidden="true">↗</span></button></div>
+              <p id="destination-suggestion-status" class="discovery-status" role="status">上の日程を使って、行き先を最大3候補提案します。出発地を入れると移動のしやすさも考慮します。</p>
+              <div id="destination-suggestions" aria-busy="false" hidden></div>
+            </section>
             <div class="form-footer"><span class="form-hint" id="api-status" role="status"><span>◌</span> GPT-6 Luna APIを確認中…</span><button class="primary-button" type="submit"><span>✦</span> 旅程をつくる <span class="button-arrow">↗</span></button></div>
           </form>
         </section>
