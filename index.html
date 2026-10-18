@@ -6,9 +6,9 @@
     <meta name="theme-color" content="#f7f7f3" />
     <meta name="description" content="行き先と日程から、あなたにぴったりの旅程を自動でつくる旅行スケジューラー。" />
     <title>tabi. — 旅のスケジューラー</title>
-    <link rel="stylesheet" href="/styles.css?v=20" />
+    <link rel="stylesheet" href="/styles.css?v=21" />
     <script src="/itinerary-utils.js?v=3" defer></script>
-    <script src="/app.js?v=20" defer></script>
+    <script src="/app.js?v=21" defer></script>
   </head>
   <body>
     <div class="app-shell">
@@ -51,24 +51,47 @@
               <label class="chip"><input type="checkbox" value="shopping" /><span>◇</span>ショッピング</label>
               <label class="chip"><input type="checkbox" value="art" /><span>◉</span>アート</label>
             </div></div>
-            <section class="destination-discovery" aria-labelledby="destination-discovery-title">
-              <div class="discovery-heading"><div><h2 id="destination-discovery-title">日程から、行き先を探す。</h2><p>まだ決まっていなくても大丈夫。季節・日数・好みに合う候補をご提案。</p></div></div>
+            <div class="form-footer"><span class="form-hint" id="api-status" role="status"><span>◌</span> APIを確認中…</span><button class="primary-button" type="submit"><span>✦</span> 旅程をつくる <span class="button-arrow">↗</span></button></div>
+            <div class="generation-panel" id="generation-panel" hidden>
+              <div class="generation-heading"><p id="generation-status" role="status"></p><button id="cancel-generation" type="button">作成を中止</button></div>
+              <p id="generation-detail"></p>
+            </div>
+            <details class="destination-discovery">
+              <summary class="discovery-heading"><div><h2 id="destination-discovery-title">行き先が未定なら、日程から探す</h2><p>季節・日数・好みに合う候補をご提案。</p></div><span aria-hidden="true">⌄</span></summary>
+              <div class="discovery-body">
               <div class="discovery-controls"><label for="destination-scope">旅の範囲<select id="destination-scope"><option value="domestic">日本国内</option><option value="overseas">海外</option></select></label><button id="suggest-destinations-button" type="button">日程からおすすめを見る <span aria-hidden="true">↗</span></button></div>
               <p id="destination-suggestion-status" class="discovery-status" role="status">上の日程を使って、行き先を最大3候補提案します。出発地を入れると移動のしやすさも考慮します。</p>
               <div id="destination-suggestions" aria-busy="false" hidden></div>
-            </section>
-            <div class="form-footer"><span class="form-hint" id="api-status" role="status"><span>◌</span> GPT-6 Luna APIを確認中…</span><button class="primary-button" type="submit"><span>✦</span> 旅程をつくる <span class="button-arrow">↗</span></button></div>
+              </div>
+            </details>
           </form>
         </section>
 
         <section class="results-section" id="results" aria-live="polite">
-          <div class="results-heading"><div><div class="eyebrow"><span></span> YOUR ITINERARY</div><h2><span id="result-destination">旅程</span><span id="result-suffix"></span> <span class="generated-badge"><span>✦</span> PLAN READY</span></h2><p id="trip-summary">行き先と日程を決め、「旅程をつくる」を押してください。</p></div><div class="result-actions"><button class="icon-button" id="share-button" type="button" aria-label="旅程をコピー" title="旅程をコピー" disabled>↗</button><button class="save-button" id="save-button" type="button" disabled><span>♡</span> 保存する</button></div></div>
+          <div class="results-heading"><div><div class="eyebrow"><span></span> YOUR ITINERARY</div><h2><span id="result-destination">旅程</span><span id="result-suffix"></span> <span class="generated-badge"><span>✦</span> PLAN READY</span></h2><p id="trip-summary">行き先と日程を決め、「旅程をつくる」を押してください。</p></div><div class="result-actions"><button class="icon-button" id="share-button" type="button" aria-label="旅程をコピー" title="旅程をコピー" disabled>↗</button><button class="save-button" id="save-button" type="button" disabled><span>♡</span> 保存した旅に追加</button></div></div>
+          <div class="draft-save-row" id="draft-save-row" hidden><span id="draft-save-status" role="status"></span><button id="retry-draft-save" type="button" hidden>保存を再試行</button></div>
           <div class="trip-overview"><div class="overview-item"><span class="overview-icon">▦</span><div><small>旅行期間</small><strong id="overview-dates">—</strong></div></div><div class="overview-divider"></div><div class="overview-item"><span class="overview-icon peach">◷</span><div><small>旅の日数</small><strong id="overview-days">—</strong></div></div><div class="overview-divider"></div><div class="overview-item"><span class="overview-icon mint">⌖</span><div><small>旅のペース</small><strong id="overview-pace">ちょうどいい</strong></div></div><div class="overview-weather"><span>☼</span>天気・営業時間は現地で確認してください</div></div>
+          <details class="budget-card" id="budget-card">
+            <summary><span class="budget-icon">￥</span><span class="budget-summary-copy"><strong>節約予算の目安</strong><small id="budget-summary">国内旅行・1人分を計算します</small></span><span class="budget-total" id="budget-per-person">—</span><span class="budget-chevron" aria-hidden="true">⌄</span></summary>
+            <div class="budget-body">
+              <p class="budget-caption">国内旅行の節約プランとして概算します。実際の料金や宿泊日数に合わせて調整してください。</p>
+              <div class="budget-inputs">
+                <label>人数<input id="budget-people" type="number" min="1" max="20" step="1" value="1"></label>
+                <label>宿泊（1人・1泊）<span><input id="budget-lodging" type="number" min="0" max="1000000" step="500" value="5000"> 円</span></label>
+                <label>食事（1人・1日）<span><input id="budget-meals" type="number" min="0" max="1000000" step="500" value="2000"> 円</span></label>
+                <label>現地交通（1人・1日）<span><input id="budget-local-transit" type="number" min="0" max="1000000" step="500" value="1000"> 円</span></label>
+                <label>入場料など（1人・1日）<span><input id="budget-admission" type="number" min="0" max="1000000" step="500" value="1000"> 円</span></label>
+                <label>往復の交通費（1人）<span><input id="budget-intercity" type="number" min="0" max="10000000" step="1000" value="0"> 円</span></label>
+              </div>
+              <div class="budget-breakdown" id="budget-breakdown" aria-live="polite"></div>
+              <p class="budget-exclusion">航空券・新幹線などの往復交通費は初期値に含みません。必要な場合は入力してください。</p>
+            </div>
+          </details>
           <div class="day-tabs" id="day-tabs" role="tablist" aria-label="日程を選択"></div>
           <div class="route-toolbar"><label for="route-mode">移動手段<select id="route-mode"><option value="TRANSIT">電車・バス</option><option value="WALK">徒歩</option><option value="DRIVE">車</option></select></label><span id="route-status" role="status">地点と道路距離から移動時間の概算を計算します。時刻表は使いません。</span><span class="route-credit"><a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">© OpenStreetMap contributors</a> / <a href="https://project-osrm.org/" target="_blank" rel="noopener noreferrer">OSRM</a></span></div>
           <button class="route-retry" id="route-retry" type="button" hidden>全日程を再計算</button>
           <div class="day-content" id="day-content"><p class="empty-day">旅程を作成すると、日ごとの予定がここに表示されます。</p></div>
-          <div class="itinerary-note"><span>✧</span><div><strong>予定を自由にカスタマイズ。</strong><p>下書きは自動でデータベースに保存されます。「保存する」で旅程を保存できます。予定の追加・編集・削除や並べ替えもできます。</p></div><button id="regenerate-button" type="button" disabled>↻　旅程を組み直す</button></div>
+          <div class="itinerary-note"><span>✧</span><div><strong>予定を自由にカスタマイズ。</strong><p>下書きは自動保存されます。「保存した旅に追加」で一覧に残せます。追加後の変更も自動で反映されます。</p></div><button id="regenerate-button" type="button" disabled>↻　旅程を組み直す</button></div>
         </section>
         <footer class="page-footer"><span>© 2026 tabi. Plan a little. Go a lot.</span><span>旅のしおりを、もっと自由に。</span><nav aria-label="補足情報"><a href="/terms.html">利用規約</a><a href="/privacy.html">プライバシー</a></nav></footer>
       </main>

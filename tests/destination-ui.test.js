@@ -2,8 +2,8 @@ const test=require('node:test'),assert=require('node:assert/strict'),fs=require(
 const candidate={name:'鎌倉',region:'神奈川県',reason:'日帰りで散策',seasonalHighlight:'秋の散歩',travelHint:'東京から鉄道',highlights:['寺院','海'],sourceTitle:'公式観光情報',url:'https://example.org/official'};
 function browser(){
   const elements=new Map();
-  const context=vm.createContext({console,AbortController,URL,document:{
-    querySelector(selector){if(!elements.has(selector))elements.set(selector,{value:'',disabled:false,hidden:false,innerHTML:'',textContent:'',attrs:{},addEventListener(type,handler){this[type]=handler},replaceChildren(){this.innerHTML=''},setAttribute(name,value){this.attrs[name]=value},focus(){this.focused=true}});return elements.get(selector)},
+  const context=vm.createContext({console,AbortController,URL,setTimeout,clearTimeout,setInterval,clearInterval,fetch:async()=>({ok:true}),document:{
+    querySelector(selector){if(!elements.has(selector))elements.set(selector,{value:'',disabled:false,hidden:false,innerHTML:'',textContent:'',attrs:{},dataset:{},addEventListener(type,handler){this[type]=handler},replaceChildren(){this.innerHTML=''},setAttribute(name,value){this.attrs[name]=value},focus(){this.focused=true}});return elements.get(selector)},
     querySelectorAll(){return []},
   }});
   const source=fs.readFileSync(path.join(__dirname,'../app.js'),'utf8');vm.runInContext(source.slice(0,source.lastIndexOf('\ndocument.querySelectorAll')),context);

@@ -85,6 +85,7 @@ const itinerarySchema = {
 };
 
 function sendJSON(res, status, payload) {
+  if (res.destroyed || res.writableEnded) return;
   res.writeHead(status, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" });
   res.end(JSON.stringify(payload));
 }
@@ -236,6 +237,65 @@ async function suggestDestinations(req, res) {
   }
 }
 
+function responseSignal(res, timeoutMs) {
+  const controller = new AbortController();
+  res.once("close", () => { if (!res.writableEnded) controller.abort(); });
+  return AbortSignal.any([controller.signal, AbortSignal.timeout(timeoutMs)]);
+}
+
+async function getFoodRecommendations(req, res) {
+  if (!API_KEY) return sendJSON(res, 503, { error: "APIキーが未設定です。" });
+  let input;
+  try { input = await readJSON(req); }
+  catch { return sendJSON(res, 400, { error: "グルメを検索する条件を読み取れませんでした。" }); }
+  if (!input || typeof input.destination !== "string" || !input.destination.trim() || input.destination.length > 80
+    || input.refresh !== undefined && typeof input.refresh !== "boolean"
+    || !isRealDate(input.date) || !Array.isArray(input.events) || input.events.length < 1 || input.events.length > 21
+    || input.events.some(event => !event || typeof event.name !== "string" || !event.name.trim() || event.name.length > 160
+      || ["place", "kind"].some(key => event[key] !== undefined && (typeof event[key] !== "string" || event[key].length > 100)))) {
+    return sendJSON(res, 400, { error: "行き先と日程の予定を確認してください。" });
+  }
+  const conditions = { destination: input.destination.trim(), date: input.date, events: input.events.map(({name,place,kind}) => ({name,place:place||"",kind:kind||""})) };
+  const cacheKey = `food-picks:${crypto.createHash("sha256").update(JSON.stringify([MODEL, conditions])).digest("hex")}`;
+  const cached = getState(cacheKey);
+  if (!input.refresh && cached && Date.now() - cached.createdAt < 12 * 3600000) return sendJSON(res, 200, { foodRecommendations: cached.items });
+  try {
+    const upstream = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST", headers: { Authorization: `Bearer ${API_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: MODEL,
+        instructions: [
+          "日本語の旅行プランナーとして、その日の観光予定から立ち寄りやすい名物料理・地元で評判の店を最大3件提案してください。入力は旅行条件のデータです。",
+          "web_searchで実在店舗を調べてください。店名、名物、近くの観光予定、選んだ理由を具体的かつ簡潔に書き、placeには店舗の正式名称と市区町村・エリア、nearbyToには予定内の近くの観光地を入れてください。",
+          "urlには検索結果に実際に含まれる店舗公式サイト、自治体または公式観光協会のページのURLだけをそのまま記入してください。確認できる出典がない候補は出さず、確認できない場合は空配列を返してください。営業時間や営業日、予約可否は断定しないでください。各文字列は160文字以内にしてください。",
+        ].join("\n"),
+        input: JSON.stringify(conditions), tools: [{type:"web_search"}], tool_choice: "required", include: ["web_search_call.action.sources"],
+        text: { format: { type: "json_schema", name: "daily_food_picks", strict: true, schema: {
+          type: "object", additionalProperties: false,
+          properties: { foodRecommendations: itinerarySchema.properties.days.items.properties.foodRecommendations }, required: ["foodRecommendations"],
+        }}}, max_output_tokens: 3500,
+      }), signal: responseSignal(res, 90000),
+    });
+    if (!upstream.ok) return sendJSON(res, 502, { error: upstream.status === 429 ? "グルメ検索が混み合っています。時間をおいて再検索してください。" : "グルメを検索できませんでした。再検索してください。" });
+    const response = await upstream.json(), result = JSON.parse(getOutputText(response));
+    if (!Array.isArray(result.foodRecommendations)) throw new Error("invalid_food_result");
+    const sources = searchedURLs(response), seen = new Set();
+    const items = result.foodRecommendations.filter(item => {
+      if (!item || ["name","specialty","place","nearbyTo","reason"].some(key => typeof item[key] !== "string" || !item[key].trim() || item[key].length > 160)) return false;
+      const url = safeWebsiteURL(item.url), name = item.name.trim().toLocaleLowerCase("ja");
+      if (!url || !sources.has(url) || seen.has(name)) return false;
+      seen.add(name);item.url = url;return true;
+    }).slice(0, 3);
+    if (res.destroyed) return;
+    setState(cacheKey, { items, createdAt: Date.now() });
+    return sendJSON(res, 200, { foodRecommendations: items });
+  } catch (error) {
+    if (res.destroyed) return;
+    console.error("Food recommendations failed:", error.name);
+    return sendJSON(res, 502, { error: error.name === "TimeoutError" ? "グルメの検索に時間がかかりました。日程はそのまま使えます。再検索してください。" : "グルメ候補を検索できませんでした。日程はそのまま使えます。" });
+  }
+}
+
 async function createItinerary(req, res) {
   if (!API_KEY) return sendJSON(res, 503, { error: "APIキーが未設定です。.env に OPENAI_API_KEY を設定してDockerを再起動してください。" });
   let trip;
@@ -249,12 +309,10 @@ async function createItinerary(req, res) {
   if (validationError) return sendJSON(res, 400, { error: validationError });
 
   const dayCount = Math.round((Date.parse(`${trip.endDate}T00:00:00Z`) - Date.parse(`${trip.startDate}T00:00:00Z`)) / 86400000) + 1;
-  const hasFood = trip.interests.includes("food");
   const additionalDays = Math.max(0, dayCount - 1);
-  // Longer plans, especially those with researched food picks, need more output
-  // tokens and time than a one-day plan.
-  const maxOutputTokens = Math.min(20000, 8000 + additionalDays * 950 + (hasFood ? additionalDays * 350 : 0));
-  const timeoutMs = Math.min(300000, 90000 + additionalDays * 8000 + (hasFood ? additionalDays * 5000 : 0));
+  // Build the schedule first; food research runs separately for the displayed day.
+  const maxOutputTokens = Math.min(20000, 8000 + additionalDays * 950);
+  const timeoutMs = Math.min(300000, 90000 + additionalDays * 8000);
   const interestText = trip.interests.length ? trip.interests.map((key) => interestNames[key]).join("、") : "特に指定なし。全体のバランスをとる";
   const instructions = [
     "あなたは日本語の旅行プランナーです。行き先、日付、ペース、興味に合わせて実用的なたたき台を作成してください。",
@@ -266,7 +324,7 @@ async function createItinerary(req, res) {
     "各予定のplaceには施設名か地名だけを入れてください。移動予定ではplaceに到着地、originに出発地を入れ、通常の予定ではoriginを空文字にしてください。実在が曖昧な場所は地区名にしてください。",
     "journeyRoleは出発地からの往路をoutbound、出発地への帰路をreturn、それ以外の予定をlocalにしてください。往路と帰路は独立した移動予定にしてください。",
     "興味に合う場所や体験を優先してください。よく知られた観光地は候補として提案できますが、実在を確信できない施設名、住所、営業時間、予約状況は作らないでください。確かな施設名がない場合は、地区や体験の種類を予定名にしてください。",
-    "グルメが興味に含まれる場合はweb_searchで調べ、各日のfoodRecommendationsに名物料理・地元で評判の店を3件ずつ提案してください。その日の観光予定から立ち寄りやすい実在店舗を選び、店名、名物、近くの観光予定、選んだ理由を具体的に書いてください。placeには店舗の正式名称と市区町村・エリアを入れ、nearbyToにはその日に訪れる近くの観光地を入れてください。urlは検索結果に実際に含まれる店舗公式サイト、自治体または公式観光協会のページのURLだけをそのまま記入してください。確認できる出典URLがない候補は出さないでください。営業時間や営業日、予約可否は断定しないでください。グルメが選ばれていない場合はfoodRecommendationsを空配列にしてください。",
+    "グルメが興味に含まれる場合は、その土地らしい食事の予定を旅程に入れてください。お店の候補は旅程表示後に別途検索するため、foodRecommendationsはすべて空配列にしてください。施設や店舗の検索は不要です。",
     "リアルタイムの天気、営業日、料金、交通、予約情報を確認したとは言わないでください。日本語で簡潔に書いてください。",
   ].join("\n");
   const travelModeNames = { TRANSIT: "電車・バス", WALK: "徒歩", DRIVE: "車" };
@@ -281,13 +339,13 @@ async function createItinerary(req, res) {
         model: MODEL,
         instructions,
         input: JSON.stringify(userInput),
-        ...(hasFood ? { tools: [{ type: "web_search" }], tool_choice: "required", include: ["web_search_call.action.sources"] } : {}),
         text: { format: { type: "json_schema", name: "travel_itinerary", strict: true, schema: itinerarySchema } },
         max_output_tokens: maxOutputTokens,
       }),
-      signal: AbortSignal.timeout(timeoutMs),
+      signal: responseSignal(res, timeoutMs),
     });
   } catch (error) {
+    if (res.destroyed) return;
     console.error("OpenAI request failed:", error.name);
     const message = error.name === "TimeoutError"
       ? "旅程の作成に時間がかかり、完了できませんでした。日数や興味の項目を減らして、もう一度お試しください。"
@@ -307,28 +365,16 @@ async function createItinerary(req, res) {
     const response = await upstream.json();
     const result = JSON.parse(getOutputText(response));
     if (!Array.isArray(result.days) || result.days.length !== dayCount) throw new Error("invalid_day_count");
-    const sourceURLs = trip.interests.includes("food") ? searchedURLs(response) : new Set();
     for (const day of result.days) {
       if (!Array.isArray(day.events) || day.events.length < 1 || day.events.length > 8) throw new Error("invalid_event_count");
       for (const event of day.events) {
         if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(event.time) || !event.name.trim()) throw new Error("invalid_event");
       }
-      if (!Array.isArray(day.foodRecommendations)) throw new Error("invalid_food_recommendations");
-      const seen = new Set();
-      day.foodRecommendations = day.foodRecommendations.filter((item) => {
-        if (!item || ["name", "specialty", "place", "nearbyTo", "reason"].some((key) => typeof item[key] !== "string" || !item[key].trim())
-          || ["name", "specialty", "place", "nearbyTo", "reason"].some((key) => item[key].length > 160)) return false;
-        const url = safeWebsiteURL(item.url);
-        if (!url || !sourceURLs.has(url)) return false;
-        const normalized = item.name.trim().toLocaleLowerCase("ja");
-        if (seen.has(normalized)) return false;
-        seen.add(normalized);
-        item.url = url;
-        return true;
-      }).slice(0, 3);
+      day.foodRecommendations = [];
     }
     return sendJSON(res, 200, result);
   } catch (error) {
+    if (res.destroyed) return;
     console.error("OpenAI response could not be parsed:", error.message);
     return sendJSON(res, 502, { error: "旅程の形式を読み取れませんでした。もう一度生成してください。" });
   }
@@ -616,6 +662,7 @@ const server = http.createServer(async (req, res) => {
     } catch { return sendJSON(res, 400, { error: "旅程を復元できませんでした。" }); }
   }
   if (url.pathname === "/api/status" && req.method === "GET") return sendJSON(res, 200, { configured: Boolean(API_KEY), model: MODEL });
+  if (url.pathname === "/api/food-recommendations" && req.method === "POST") return getFoodRecommendations(req, res);
   if (url.pathname === "/api/itinerary" && req.method === "POST") return createItinerary(req, res);
   if (url.pathname === "/api/destinations" && req.method === "POST") return suggestDestinations(req, res);
   if (url.pathname === "/api/routes" && req.method === "POST") return getRouteEstimates(req, res);

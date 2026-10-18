@@ -8,14 +8,14 @@ const { webcrypto } = require('node:crypto');
 function httpBrowser() {
   const elements = new Map();
   const createElement = () => ({
-    value: '', innerHTML: '', disabled: false, children: [],
+    value: '', innerHTML: '', disabled: false, children: [], dataset: {}, scrollIntoView() {},
     addEventListener(type, handler) { this[type] = handler; },
     replaceChildren(...children) { this.children = children; },
   });
   const context = vm.createContext({
     // Ordinary HTTP exposes getRandomValues, but not randomUUID.
     crypto: { getRandomValues: bytes => webcrypto.getRandomValues(bytes) },
-    console, structuredClone,
+    console, structuredClone, AbortController, setTimeout, clearTimeout, setInterval, clearInterval,
     document: {
       querySelector(selector) {
         if (!elements.has(selector)) elements.set(selector, createElement());
