@@ -7,10 +7,9 @@ const catalog={
 };
 const genericSpots=[{name:"街のシンボル・中心エリア",kind:"まずは街の雰囲気をつかむ散策",emoji:"⌖",duration:"75分",tag:"culture"},{name:"ローカルマーケット",kind:"地元の食材や名物をのぞく",emoji:"🍴",duration:"75分",tag:"food"},{name:"歴史地区を歩く",kind:"建築や町並みから土地の物語に触れる",emoji:"🏛️",duration:"90分",tag:"culture"},{name:"街のミュージアム",kind:"地域の文化やアートを楽しむ",emoji:"🖼️",duration:"90分",tag:"art"},{name:"公園・展望スポット",kind:"景色を眺めてひと休み",emoji:"🌿",duration:"75分",tag:"nature"},{name:"地元の商店街",kind:"気になるお店でおみやげ探し",emoji:"🛍️",duration:"75分",tag:"shopping"},{name:"人気のカフェエリア",kind:"街角のカフェでゆっくり",emoji:"☕",duration:"60分",tag:"food"},{name:"夕暮れの散歩道",kind:"景色のいい場所で一日の締めくくり",emoji:"🌇",duration:"60分",tag:"nature"},{name:"名物料理のお店",kind:"この街ならではの味を楽しむ",emoji:"🍽️",duration:"90分",tag:"food"},{name:"アート・カルチャー施設",kind:"展示やイベントをチェック",emoji:"🎨",duration:"90分",tag:"art"}];
 const fallbackNames={"京都":/kyoto/i,"東京":/tokyo/i,"大阪":/osaka/i,"台北":/taipei/i,"パリ":/paris/i};
-const $=s=>document.querySelector(s);const DRAFT_KEY="tabi-current-draft",SAVED_KEY="tabi-saved-trips";let trip=null,activeDay=0,toastTimer,savedTrips=[],draftTimer,draftQueue=Promise.resolve(),travelMode="TRANSIT",routeRequestId=0;const officialSiteRequests=new Map();let deletedTrips=[],savedView="active",routesUpdatingAll=false,routesUpdatingTrip=null,routesUpdatingMode=null,routeUpdatePromise=Promise.resolve();const deletingTripIds=new Set();
+const $=s=>document.querySelector(s);const DRAFT_KEY="tabi-current-draft",SAVED_KEY="tabi-saved-trips";let trip=null,activeDay=0,toastTimer,savedTrips=[],draftTimer,draftQueue=Promise.resolve(),travelMode="TRANSIT",routeRequestId=0;const officialSiteRequests=new Map();let routesUpdatingAll=false,routesUpdatingTrip=null,routesUpdatingMode=null,routeUpdatePromise=Promise.resolve();const deletingTripIds=new Set();
 const pad=n=>String(n).padStart(2,"0");const localISO=d=>`${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;const parseLocal=s=>new Date(`${s}T12:00:00`);const dateLabel=(d,opts={month:"short",day:"numeric"})=>new Intl.DateTimeFormat("ja-JP",opts).format(d);const dateRange=(a,b)=>{const x=parseLocal(a),y=parseLocal(b);return `${x.getFullYear()}年${x.getMonth()+1}月${x.getDate()}日 〜 ${y.getMonth()+1}月${y.getDate()}日`};const dayCount=(a,b)=>Math.round((parseLocal(b)-parseLocal(a))/86400000)+1;
-let generationRequest=null;
-const foodRequests=new Map(),draftStates=new Map();
+const draftStates=new Map();
 function currentDraftState(id=trip?.id){if(!draftStates.has(id))draftStates.set(id,{revision:0,status:"pending",savedAt:0});return draftStates.get(id)}
 function renderDraftStatus(){
  const row=$("#draft-save-row"),label=$("#draft-save-status"),retry=$("#retry-draft-save");row.hidden=!trip;if(!trip)return;
@@ -32,74 +31,42 @@ function enqueueDraftSave(snapshot,revision){
  return draftQueue;
 }
 function prepareDraftSave(){const state=currentDraftState();state.status="pending";state.revision++;renderDraftStatus();return state.revision}
-function persistDraft(){if(!trip)return;const snapshot=serializeTrip({...trip,activeDay}),revision=prepareDraftSave();clearTimeout(draftTimer);draftTimer=setTimeout(()=>enqueueDraftSave(snapshot,revision),250)}
+function persistDraft(){if(!trip||importApplying)return;const snapshot=serializeTrip({...trip,activeDay}),revision=prepareDraftSave();clearTimeout(draftTimer);draftTimer=setTimeout(()=>enqueueDraftSave(snapshot,revision),250)}
 function flushDraft(){if(!trip)return Promise.resolve();clearTimeout(draftTimer);const revision=prepareDraftSave();return enqueueDraftSave(serializeTrip({...trip,activeDay}),revision)}
 $("#retry-draft-save").addEventListener("click",()=>flushDraft());
-function restoreDraft(draft){if(!draft?.days?.length)return false;try{cancelGeneration(true);cancelFoodSearches();if(trip)flushDraft();const legacy=savedTrips.find(item=>item.destination===draft.destination&&item.startDate===draft.startDate);trip={...draft,initialTravelMode:draft.initialTravelMode||draft.travelMode||"TRANSIT",id:draft.id||legacy?.id||TabiSchedule.createId(),travelMode:draft.travelMode||travelMode,days:draft.days.map(day=>({...day,date:new Date(day.date)}))};travelMode=trip.travelMode;$("#route-mode").value=travelMode;activeDay=Math.min(draft.activeDay||0,trip.days.length-1);$("#departure-point").value=trip.departurePoint||"";$("#destination").value=trip.destination;$("#start-date").value=trip.startDate;$("#end-date").value=trip.endDate;$("#end-date").min=trip.startDate;$("#pace").value=trip.pace;document.querySelectorAll(".chip input").forEach(input=>{input.checked=trip.interests.includes(input.value);input.closest(".chip").classList.toggle("selected",input.checked)});render();return true}catch(error){console.error("Could not restore the itinerary:",error);return false}}
-async function initializeStorage(){try{const response=await fetch("/api/storage",{cache:"no-store"});if(!response.ok)throw new Error();const stored=await response.json();savedTrips=stored.saved||[];deletedTrips=stored.deleted||[];let draft=stored.draft;try{const oldDraft=JSON.parse(localStorage.getItem(DRAFT_KEY)||"null"),oldSaved=JSON.parse(localStorage.getItem(SAVED_KEY)||"[]");if(!draft&&oldDraft?.days?.length){draft=oldDraft;const migrated=await fetch("/api/storage/draft",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({draft})});if(!migrated.ok)throw new Error()}for(const oldTrip of oldSaved){const migrated=await fetch("/api/storage/saved",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({trip:oldTrip})});if(!migrated.ok)throw new Error();savedTrips=(await migrated.json()).saved}localStorage.removeItem(DRAFT_KEY);localStorage.removeItem(SAVED_KEY)}catch(error){console.warn("Previous browser-saved trips could not be migrated:",error.message)}updateSaved();if(draft?.days?.length){if(!restoreDraft(draft))renderStorageError("保存した旅程を表示できませんでした。")}else renderEmpty()}catch{renderStorageError("保存データベースに接続できません。VPN接続を確認してください。")}}
+function restoreDraft(draft,{flushCurrent=true}={}){if(!draft?.days?.length)return false;try{if(trip&&flushCurrent)flushDraft();const legacy=savedTrips.find(item=>item.destination===draft.destination&&item.startDate===draft.startDate);trip={...draft,initialTravelMode:draft.initialTravelMode||draft.travelMode||"TRANSIT",id:draft.id||legacy?.id||TabiSchedule.createId(),travelMode:draft.travelMode||travelMode,days:draft.days.map(day=>({...day,date:new Date(day.date)}))};travelMode=trip.travelMode;activeDay=Math.min(draft.activeDay||0,trip.days.length-1);$("#destination").value=trip.destination;$("#start-date").value=trip.startDate;$("#end-date").value=trip.endDate;$("#end-date").min=trip.startDate;$("#pace").value=trip.pace;document.querySelectorAll(".chip input").forEach(input=>{input.checked=trip.interests.includes(input.value);input.closest(".chip").classList.toggle("selected",input.checked)});render();return true}catch(error){console.error("Could not restore the itinerary:",error);return false}}
+async function initializeStorage(){try{const response=await fetch("/api/storage",{cache:"no-store"});if(!response.ok)throw new Error();const stored=await response.json();savedTrips=stored.saved||[];let draft=stored.draft;try{const oldDraft=JSON.parse(localStorage.getItem(DRAFT_KEY)||"null"),oldSaved=JSON.parse(localStorage.getItem(SAVED_KEY)||"[]");if(!draft&&oldDraft?.days?.length){draft=oldDraft;const migrated=await fetch("/api/storage/draft",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({draft})});if(!migrated.ok)throw new Error()}for(const oldTrip of oldSaved){const migrated=await fetch("/api/storage/saved",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({trip:oldTrip})});if(!migrated.ok)throw new Error();savedTrips=(await migrated.json()).saved}localStorage.removeItem(DRAFT_KEY);localStorage.removeItem(SAVED_KEY)}catch(error){console.warn("Previous browser-saved trips could not be migrated:",error.message)}updateSaved();if(draft?.days?.length){if(!restoreDraft(draft))renderStorageError("保存した旅程を表示できませんでした。")}else renderEmpty()}catch{renderStorageError("保存データベースに接続できません。VPN接続を確認してください。")}}
 function renderStorageError(message){renderEmpty();const note=document.createElement("p"),retry=document.createElement("button");note.className="empty-day";note.textContent=message;retry.type="button";retry.className="add-event-button";retry.textContent="旅程を再読み込み";retry.addEventListener("click",async()=>{retry.disabled=true;await initializeStorage()});$("#day-content").replaceChildren(note,retry);toast(message)}
-function renderEmpty(){trip=null;renderDraftStatus();$("#result-destination").textContent="旅程";$("#result-suffix").textContent="";$("#trip-summary").textContent="行き先と日程を決め、「旅程をつくる」を押してください。";$("#overview-dates").textContent="—";$("#overview-days").textContent="—";$("#overview-pace").textContent="—";$("#budget-card").hidden=true;$("#day-tabs").innerHTML="";$("#day-content").innerHTML='<p class="empty-day">旅程を作成すると、日ごとの予定がここに表示されます。</p>';$("#share-button").disabled=true;$("#save-button").disabled=true;$("#regenerate-button").disabled=true}
-async function checkApiStatus(){const status=$("#api-status");try{const response=await fetch("/api/status");const data=await response.json();status.innerHTML=data.configured?'<span>✓</span> GPT-6 Luna API · 条件をOpenAIへ送信':'<span>!</span> .env にAPIキーを設定してください'}catch{status.innerHTML='<span>!</span> APIサーバーに接続できません'}}
+function renderEmpty(){trip=null;renderDraftStatus();$("#result-destination").textContent="旅程";$("#result-suffix").textContent="";$("#trip-summary").textContent="条件から依頼文を作り、ChatGPTの回答を取り込んでください。";$("#overview-dates").textContent="—";$("#overview-days").textContent="—";$("#overview-pace").textContent="—";$("#day-move-hint").hidden=true;$("#day-tabs").innerHTML="";$("#day-content").innerHTML='<p class="empty-day">旅程を作成すると、日ごとの予定がここに表示されます。</p>';$("#save-button").disabled=true;}
 function initializeDates(){const start=new Date();start.setDate(start.getDate()+14);const end=new Date(start);end.setDate(end.getDate()+2);$("#start-date").value=localISO(start);$("#end-date").value=localISO(end);$("#start-date").min=localISO(new Date());$("#start-date").addEventListener("change",()=>{$("#end-date").min=$("#start-date").value;if($("#end-date").value<$("#start-date").value)$("#end-date").value=$("#start-date").value});$("#end-date").min=$("#start-date").value}
 function getCatalog(destination){const cleaned=destination.trim();if(catalog[cleaned])return catalog[cleaned];for(const [name,re] of Object.entries(fallbackNames))if(re.test(cleaned))return catalog[name];return {area:cleaned,category:"街歩きとローカル体験",spots:genericSpots}}
 function buildTrip({destination,startDate,endDate,pace,interests}){const count=dayCount(startDate,endDate);if(count<1||count>21)throw Error("旅行日数は1〜21日の範囲で設定してください。");const base=getCatalog(destination);let pool=base.spots.filter(s=>interests.length===0||interests.includes(s.tag));if(pool.length<4){for(const spot of base.spots)if(!pool.includes(spot)){pool.push(spot);if(pool.length>=4)break}}const perDay=pace==="relaxed"?3:pace==="active"?5:4;const days=[];for(let d=0;d<count;d++){const events=[];for(let i=0;i<perDay;i++){const spot=pool[(d*perDay+i)%pool.length];events.push({...spot,time:(pace==="relaxed"?["09:30","13:00","16:00"]:pace==="active"?["08:30","10:45","13:15","15:30","18:00"]:["09:00","11:30","14:00","17:00"])[i],id:`${d}-${i}-${Math.random().toString(36).slice(2,7)}`})}days.push({date:new Date(parseLocal(startDate).getTime()+d*86400000),events})}return {id:TabiSchedule.createId(),destination:destination.trim(),startDate,endDate,pace,interests,days,category:base.category}}
-function render(){if(!trip)return;activeDay=Math.min(activeDay,trip.days.length-1);$("#result-destination").textContent=trip.destination;$("#result-suffix").textContent="の旅程";$("#overview-dates").textContent=dateRange(trip.startDate,trip.endDate);$("#overview-days").textContent=`${trip.days.length}日間`;$("#overview-pace").textContent={relaxed:"ゆったり",balanced:"ちょうどいい",active:"たっぷり満喫"}[trip.pace];$("#trip-summary").textContent=`${trip.departurePoint?`${trip.departurePoint}から${trip.destination}へ。`:""}${trip.destination}で過ごす${trip.days.length}日間。${trip.category}を楽しむ旅のプランです。`;$("#budget-card").hidden=false;renderBudget(true);$("#share-button").disabled=Boolean(trip.routeModePending)||routesUpdatingAll;$("#save-button").disabled=routesUpdatingAll;$("#regenerate-button").disabled=false;renderTabs();renderDay();updateSaved();persistDraft()}
-function renderBudget(syncInputs=false){
- if(!trip)return;
- const defaults={people:1,lodging:5000,meals:2000,localTransit:1000,admission:1000,intercity:0};
- trip.budget={...defaults,...trip.budget};
- const fields={people:"#budget-people",lodging:"#budget-lodging",meals:"#budget-meals",localTransit:"#budget-local-transit",admission:"#budget-admission",intercity:"#budget-intercity"};
- for(const [key,selector] of Object.entries(fields))if(syncInputs)$(selector).value=trip.budget[key];
- const values=Object.fromEntries(Object.entries(fields).map(([key,selector])=>[key,Math.max(0,Number($(selector).value)||0)]));
- values.people=Math.min(20,Math.max(1,Math.round(values.people)));
- const days=trip.days.length,nights=Math.max(0,days-1),perPerson={lodging:nights*values.lodging,meals:days*values.meals,localTransit:days*values.localTransit,admission:days*values.admission,intercity:values.intercity};
- const totalPerPerson=Object.values(perPerson).reduce((sum,value)=>sum+value,0),total=totalPerPerson*values.people;
- $("#budget-per-person").textContent=`約 ${totalPerPerson.toLocaleString("ja-JP")}円 / 人`;
- $("#budget-summary").textContent=`${days}日間・${values.people}人で合計 約${total.toLocaleString("ja-JP")}円`;
- const lines=[["宿泊",perPerson.lodging,`${nights}泊`],["食事",perPerson.meals,`${days}日`],["現地交通",perPerson.localTransit,`${days}日`],["入場料など",perPerson.admission,`${days}日`],["往復交通費",perPerson.intercity,"1人"]];
- $("#budget-breakdown").innerHTML=lines.map(([label,amount,quantity])=>`<div><span>${label}<small>${quantity}</small></span><strong>${amount.toLocaleString("ja-JP")}円</strong></div>`).join("")+`<div class="budget-grand-total"><span>${values.people}人分の合計</span><strong>${total.toLocaleString("ja-JP")}円</strong></div>`;
-}
+function render(){if(!trip)return;activeDay=Math.min(activeDay,trip.days.length-1);$("#result-destination").textContent=trip.destination;$("#result-suffix").textContent="の旅程";$("#overview-dates").textContent=dateRange(trip.startDate,trip.endDate);$("#overview-days").textContent=`${trip.days.length}日間`;$("#overview-pace").textContent={relaxed:"ゆったり",balanced:"ちょうどいい",active:"たっぷり満喫"}[trip.pace];$("#trip-summary").textContent=`${trip.departurePoint?`${trip.departurePoint}から${trip.destination}へ。`:""}${trip.destination}で過ごす${trip.days.length}日間。${trip.category}を楽しむ旅のプランです。`;$("#day-move-hint").hidden=false;$("#save-button").disabled=routesUpdatingAll;renderTabs();renderDay();updateSaved();persistDraft()}
 function renderTabs(){$("#day-tabs").innerHTML=trip.days.map((d,i)=>`<button class="day-tab ${i===activeDay?"active":""}" type="button" role="tab" aria-selected="${i===activeDay}" data-day="${i}"><small>DAY ${String(i+1).padStart(2,"0")} · ${dateLabel(d.date,{weekday:"long"})}</small><strong>${dateLabel(d.date,{month:"numeric",day:"numeric"})}</strong></button>`).join("");$("#day-tabs").querySelectorAll(".day-tab").forEach(b=>b.addEventListener("click",()=>{activeDay=Number(b.dataset.day);renderTabs();renderDay()}))}
-function foodTarget(day){const meals=TabiSchedule.mealEvents(day);return meals.find(event=>event.id===(day.foodTargetId??meals[0]?.id))||null}
-function foodSearchEvents(day){return day.events.filter(event=>!event.origin&&!['outbound','return'].includes(event.journeyRole)).map(({name,place,kind})=>({name,place:place||"",kind:kind||""}))}
-function foodSearchKey(day,sourceTrip=trip){return JSON.stringify([sourceTrip.destination,localISO(day.date),foodSearchEvents(day).map(event=>[event.name,event.place,event.kind]).sort()])}
-function refreshFoodSection(day){if(trip?.days[activeDay]===day)$("#food-recommendations").innerHTML=renderFoodRecommendations(day)}
-function cancelFoodSearches(){for(const request of foodRequests.values())request.controller.abort();foodRequests.clear()}
-async function updateFoodRecommendations(refresh=false){
- if(!trip?.interests.includes("food"))return;
- const sourceTrip=trip,day=trip.days[activeDay];if(day.events.some(event=>event.editing))return;
- const key=foodSearchKey(day),events=foodSearchEvents(day);
- if(!refresh&&(day.foodLookupKey===key||day.foodErrorKey===key))return;
- if(!refresh&&day.foodRecommendations?.length&&!day.foodLookupKey){day.foodLookupKey=key;return}
- const previous=foodRequests.get(day);if(previous?.key===key)return;if(previous)previous.controller.abort();
- if(day.foodLookupKey&&day.foodLookupKey!==key)day.foodRecommendations=[];
- if(!events.length){day.foodLookupKey=key;day.foodRecommendations=[];refreshFoodSection(day);return}
- const request={key,controller:new AbortController()};foodRequests.set(day,request);delete day.foodSearchError;delete day.foodErrorKey;refreshFoodSection(day);
- try{
-  const response=await fetch("/api/food-recommendations",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({destination:sourceTrip.destination,date:localISO(day.date),events,refresh}),signal:request.controller.signal});
-  const result=await response.json();if(!response.ok)throw new Error(result.error||"グルメ候補を検索できませんでした。");
-  if(request.controller.signal.aborted||!sourceTrip.days.includes(day)||foodSearchKey(day,sourceTrip)!==key)return;
-  if(!Array.isArray(result.foodRecommendations))throw new Error("グルメ候補を読み取れませんでした。");
-  day.foodRecommendations=result.foodRecommendations;day.foodLookupKey=key;
- }catch(error){if(!request.controller.signal.aborted&&foodSearchKey(day,sourceTrip)===key){day.foodErrorKey=key;day.foodSearchError=error.message||"グルメ候補を検索できませんでした。"}}
- finally{if(foodRequests.get(day)===request)foodRequests.delete(day);if(trip===sourceTrip){refreshFoodSection(day);persistDraft()}}
+function renderDayMap(day){
+ if(!day.events.length)return "";
+ const map=TabiMap.buildDayMap(trip,day,travelMode);
+ const links=map.routes.map((route,index)=>`<a href="${escapeHTML(route.href)}" target="_blank" rel="noopener noreferrer">${map.routes.length>1?`ルート${index+1}（${route.from} → ${route.to}）`:map.stops.length===1?"Googleマップでピンを見る":"Googleマップで一日の動きを見る"} ↗</a>`).join("");
+ const modeNote=travelMode==="TRANSIT"&&map.stops.length>2?"全体図は道路ルートで表示します。電車・バスは区間ごとのリンクで確認できます。":"Googleマップが新しいタブで開き、予定順に地点を表示します。";
+ return `<section class="day-map-panel" aria-label="一日の動き"><div class="day-map-heading"><div><h4>一日の動き</h4><p>${map.stops.length}地点を予定の順に確認</p></div><span aria-hidden="true">⌖</span></div><div class="day-map-actions">${links}</div>${map.stops.length?`<details class="day-map-stops" ${day.mapExpanded?"open":""}><summary>立ち寄る順番・地点のピンを見る</summary><ol>${map.stops.map(stop=>`<li><span class="map-stop-number">${stop.number}</span><a href="${escapeHTML(stop.href)}" target="_blank" rel="noopener noreferrer">${escapeHTML(stop.name)} <span aria-hidden="true">↗</span></a><small>${stop.role}${stop.approximate?"・地域の目安":""}</small></li>`).join("")}</ol>${map.legs.length?`<nav class="day-map-legs" aria-label="区間ごとのGoogleマップ経路"><span>${travelMode==="TRANSIT"?"電車・バス":"移動"}の経路</span>${map.legs.map(leg=>`<a href="${escapeHTML(leg.href)}" target="_blank" rel="noopener noreferrer">${leg.from} → ${leg.to} ↗</a>`).join("")}</nav>`:""}</details><p class="day-map-caption">${modeNote}${map.routes.length>1?" 地点を省略せず、複数のルートに分けています。":""}</p>`:""}${map.missing?`<p class="day-map-caption">場所未設定の予定が${map.missing}件あります。予定を編集して施設名・到着地を入力すると地図に反映されます。</p>`:""}</section>`;
 }
-function renderFoodRecommendations(day){
- const items=day.foodRecommendations||[];if(!items.length&&!trip.interests.includes("food"))return "";
- const loading=foodRequests.has(day),error=day.foodErrorKey===foodSearchKey(day)?day.foodSearchError:"";
- const header=`<details class="food-picks" ${day.foodExpanded?"open":""}><summary class="food-picks-heading"><div><h4>この日の周辺グルメ</h4><p>観光の近くで楽しめる、名物・名店の候補。</p></div><span class="food-picks-count">${loading?"検索中…":items.length?`${items.length}候補`:error?"再試行できます":"候補を確認"} <span class="food-picks-chevron" aria-hidden="true">⌄</span></span></summary><div class="food-picks-body">`;
- const notice=error?`<p class="food-search-status" role="status">${escapeHTML(error)}</p><button type="button" class="food-retry" data-food-retry>再検索</button>`:loading?'<p class="food-search-status" role="status">日程の表示は完了しています。周辺の名物・名店を調べています。</p>':!items.length?'<p class="food-search-status">確認できる候補がありませんでした。</p><button type="button" class="food-retry" data-food-retry>再検索</button>':"";
- if(!items.length)return `${header}${notice}</div></details>`;
- const meals=TabiSchedule.mealEvents(day),target=foodTarget(day),newTime=day.foodNewTime||"12:00",busy=day.events.some(event=>event.editing)||routesUpdatingAll&&routesUpdatingTrip===trip;
- return `${header}${notice}<div class="food-target-bar"><label for="food-target">入れる予定<select id="food-target" ${busy?"disabled":""}>${meals.map(event=>`<option value="${escapeHTML(event.id)}" ${target===event?"selected":""}>${escapeHTML(event.time)} · ${escapeHTML(event.name)}</option>`).join("")}<option value="" ${!target?"selected":""}>新しい食事予定を追加</option></select></label>${!target?`<label class="food-new-time">開始時刻<input id="food-new-time" type="time" value="${escapeHTML(newTime)}" ${busy?"disabled":""}></label>`:""}<p>${target?"選んだ食事予定を、おすすめのお店に変更します。":"1時間の食事予定を追加し、移動時間を再計算します。"}</p></div><div class="food-picks-list">${items.map((item,index)=>{
-  const added=Boolean(TabiSchedule.foodPickEvent(day,item)),url=safeOfficialURL(item.url);
-  return `<article class="food-pick ${added?"is-added":""}"><span class="food-pick-number">${String(index+1).padStart(2,"0")}</span><div class="food-pick-copy"><h5>${escapeHTML(item.name)}</h5><p class="food-specialty">${escapeHTML(item.specialty)}</p><p class="food-nearby">⌖ ${escapeHTML(item.nearbyTo)}周辺</p><p class="food-reason">${escapeHTML(item.reason)}</p>${url?`<a class="food-source" href="${escapeHTML(url)}" target="_blank" rel="noopener noreferrer">お店の情報・出典 ↗</a>`:""}</div><button type="button" class="food-pick-button" data-food-pick="${index}" ${added||busy?"disabled":""}>${added?"✓ 予定に入っています":target?`${escapeHTML(target.time)}の食事に入れる`:`${escapeHTML(newTime)}に追加`}</button></article>`;
- }).join("")}</div></div></details>`;
+function eventMapHref(event){
+ const mode=({TRANSIT:"transit",WALK:"walking",DRIVE:"driving"})[event.durationMode||trip.initialTravelMode||travelMode]||"transit";
+ if(event.origin&&event.place)return `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(event.origin)}&destination=${encodeURIComponent(event.place)}&travelmode=${mode}`;
+ const query=[event.place||event.name,trip.destination].filter(Boolean).join(", ");
+ return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`;
+}
+function renderEventMapLinks(day){
+ for(const row of document.querySelectorAll("#event-list .event")){
+  const event=day.events.find(item=>item.id===row.dataset.id),info=row.querySelector(".event-info");
+  if(!event||!info||event.editing)continue;
+  const link=document.createElement("a");link.className="event-map-link";link.href=eventMapHref(event);link.target="_blank";link.rel="noopener noreferrer";link.textContent="⌖ 地図で見る ↗";link.setAttribute("aria-label",`${event.name}の場所をGoogleマップで見る`);info.append(link);
+ }
 }
 function renderDayBase(){
  const day=trip.days[activeDay],date=dateLabel(day.date,{year:"numeric",month:"long",day:"numeric",weekday:"long"});
-  $("#day-content").innerHTML=`<div class="day-title-row"><div><h3>DAY ${String(activeDay+1).padStart(2,"0")}　${date}</h3><p>${escapeHTML(day.summary||"この日の予定")}</p></div><span class="day-tag">${day.events.length} 件の予定</span></div><div id="schedule-alerts" class="schedule-alerts" role="status" hidden></div><div class="event-list" id="event-list">${day.events.map((e,i)=>`${i?`<div class="travel-gap" data-route-index="${i-1}">移動時間の目安を計算中…</div>`:""}<article class="event" draggable="true" data-id="${escapeHTML(e.id)}"><time class="event-time">${escapeHTML(TabiSchedule.clockLabel((TabiSchedule.clockMinutes(e.time)||0)+Number(e.dayOffset||0)*1440))}</time><span class="event-rail"></span><div class="event-card"><span class="event-emoji">${escapeHTML(e.emoji||"✦")}</span><div class="event-info"><strong>${escapeHTML(e.name)}</strong><small>${escapeHTML(e.kind)}</small>${e.place?`<small class="event-place">⌖ ${escapeHTML(e.place)}</small>`:""}${e.timeLocked?'<span class="time-lock-badge">時刻固定</span>':""}<small class="event-end">終了 ${escapeHTML(TabiSchedule.clockLabel((TabiSchedule.clockMinutes(e.time)||0)+Number(e.dayOffset||0)*1440+eventDurationMinutes(e.duration)))}</small></div><span class="event-duration">◷ ${escapeHTML(e.duration)}</span></div><span class="event-grip" aria-label="ドラッグして並べ替え">⠿</span></article>`).join("")}</div><div id="food-recommendations">${renderFoodRecommendations(day)}</div>`;
- enableDrag();drawRouteInfo(day);
+  $("#day-content").innerHTML=`<div class="day-title-row"><div><h3>DAY ${String(activeDay+1).padStart(2,"0")}　${date}</h3><p>${escapeHTML(day.summary||"この日の予定")}</p></div><span class="day-tag">${day.events.length} 件の予定</span></div><div id="schedule-alerts" class="schedule-alerts" role="status" hidden></div><div class="event-list" id="event-list">${day.events.map((e,i)=>`${i?`<div class="travel-gap" data-route-index="${i-1}" hidden></div>`:""}<article class="event" draggable="true" data-id="${escapeHTML(e.id)}"><time class="event-time">${escapeHTML(TabiSchedule.clockLabel((TabiSchedule.clockMinutes(e.time)||0)+Number(e.dayOffset||0)*1440))}</time><span class="event-rail"></span><div class="event-card"><span class="event-emoji">${escapeHTML(e.emoji||"✦")}</span><div class="event-info"><strong>${escapeHTML(e.name)}</strong><small>${escapeHTML(e.kind)}</small>${e.place?`<small class="event-place">⌖ ${escapeHTML(e.place)}</small>`:""}${e.timeLocked?'<span class="time-lock-badge">時刻固定</span>':""}<small class="event-end">終了 ${escapeHTML(TabiSchedule.clockLabel((TabiSchedule.clockMinutes(e.time)||0)+Number(e.dayOffset||0)*1440+eventDurationMinutes(e.duration)))}</small></div><span class="event-duration">◷ ${escapeHTML(e.duration)}</span></div><span class="event-grip" aria-label="ドラッグして並べ替え">⠿</span></article>`).join("")}</div>`;
+ $("#day-content .day-title-row").insertAdjacentHTML("afterend",renderDayMap(day));renderEventMapLinks(day);enableDrag();drawRouteInfo(day);
 }
 function routeDurationLabel(seconds){const minutes=Math.max(1,Math.ceil(seconds/60)),days=Math.floor(minutes/1440),hours=Math.floor(minutes%1440/60),rest=minutes%60;return `約${days?`${days}日`:""}${hours?`${hours}時間`:""}${rest?`${rest}分`:days||hours?"":"1分"}`}
 function parseClockMinutes(value){const match=/^(\d{1,2}):(\d{2})$/.exec(String(value||""));return match?Number(match[1])*60+Number(match[2]):null}
@@ -110,15 +77,12 @@ function applyTravelAwareSchedule(day,segments,mode){return TabiSchedule.schedul
 function routeEvents(day){return day.events.map(event=>({name:event.name,kind:event.kind||"",duration:event.durationBase||event.duration||"",durationMode:event.durationMode||trip.initialTravelMode||"TRANSIT",place:event.place||"",origin:event.origin||""}))}
 function routeKey(day){return JSON.stringify([trip.destination,routeEvents(day)])}
 function drawRouteInfo(day){
- const status=$("#route-status"),data=day.routeData,result=data?.result;
- if(routesUpdatingAll&&routesUpdatingTrip===trip)status.textContent=trip.routeProgress||"全日程の移動時間を更新中…";
- else if(trip.routeModePending)status.textContent="未更新の日があります。「全日程を再計算」を押してください。";
- else if(data?.error)status.textContent=data.error;
- else status.textContent=day.scheduleIssues?.some(issue=>issue.type!=="unknown")?"固定時刻や終了時刻を確認してください。":result?.segments.some(item=>item.source==="area")?"場所未確定の区間は時間の幅で表示し、余裕を含めて調整しています。":"移動時間は概算です。時刻表・交通状況は含みません。";
+ const data=day.routeData,result=data?.result;
+ const visibleIssues=(day.scheduleIssues||[]).filter(issue=>issue.type!=="unknown");
  $("#route-retry").hidden=!trip.routeModePending&&!data?.error;
- for(const gap of document.querySelectorAll("#event-list .travel-gap")){const segment=result?.segments.find(item=>item.index===Number(gap.dataset.routeIndex));gap.textContent=data?.error?"移動時間を確認できません":segment?TabiSchedule.travelLabel(segment,travelMode):"移動時間の目安を計算中…"}
- const box=$("#schedule-alerts");if(!box)return;box.replaceChildren();box.hidden=!day.scheduleIssues?.length;
- for(const issue of day.scheduleIssues||[]){const note=document.createElement("p");note.textContent=issue.message;box.append(note)}
+ for(const gap of document.querySelectorAll("#event-list .travel-gap")){const segment=result?.segments.find(item=>item.index===Number(gap.dataset.routeIndex));gap.hidden=!data?.error&&(!segment||segment.reason==="場所を特定できません");if(!gap.hidden)gap.textContent=data?.error?"移動時間を確認できません":TabiSchedule.travelLabel(segment,travelMode)}
+ const box=$("#schedule-alerts");if(!box)return;box.replaceChildren();box.hidden=!visibleIssues.length;
+ for(const issue of visibleIssues){const note=document.createElement("p");note.textContent=issue.message;box.append(note)}
  for(const row of document.querySelectorAll("#event-list .event"))row.classList.toggle("has-conflict",Boolean(day.scheduleIssues?.some(issue=>issue.id===row.dataset.id&&issue.type!=="unknown")));
 }
 function updateRouteEstimates(all=false){
@@ -127,7 +91,7 @@ function updateRouteEstimates(all=false){
  const sourceTrip=trip,mode=travelMode,requestId=++routeRequestId,days=all?[...trip.days]:[trip.days[activeDay]];
  routesUpdatingAll=all;routesUpdatingTrip=sourceTrip;routesUpdatingMode=mode;
  if(all){trip.routeModePending=true;trip.routeProgress=`全日程を更新中… 0/${days.length}日`;renderDay(false)}
- $("#share-button").disabled=true;
+
  const isCurrent=()=>trip===sourceTrip&&travelMode===mode&&requestId===routeRequestId;
  const work=(async()=>{
    const result=await TabiSchedule.recalculateDays(days,{mode,isCurrent,loadRoutes:async day=>{
@@ -137,7 +101,7 @@ function updateRouteEstimates(all=false){
    },onProgress:(done,total,day)=>{sourceTrip.routeProgress=`全日程を更新中… ${done}/${total}日`;if(sourceTrip.days[activeDay]===day)renderDay(false);else drawRouteInfo(sourceTrip.days[activeDay])}});
    if(!isCurrent()||result.cancelled)return;
    routesUpdatingAll=false;delete sourceTrip.routeProgress;if(all)sourceTrip.routeModePending=result.failures.length>0;
-   renderDay(false);updateSaved();$("#share-button").disabled=Boolean(sourceTrip.routeModePending);persistDraft();
+   renderDay(false);updateSaved();persistDraft();
  })().catch(error=>{if(!isCurrent())return;routesUpdatingAll=false;if(all)sourceTrip.routeModePending=true;toast(error.message);drawRouteInfo(sourceTrip.days[activeDay]);updateSaved()});
  routeUpdatePromise=work;return work;
 }
@@ -148,7 +112,33 @@ function moveEvent(id,offset){
  const row=[...$("#event-list").querySelectorAll(".event")].find(element=>element.dataset.id===id);row?.querySelector(offset<0?".event-move-up:not(:disabled),.event-move-down:not(:disabled)":".event-move-down:not(:disabled),.event-move-up:not(:disabled)")?.focus();
  toast(`「${event.name}」を${offset<0?"上":"下"}へ移動しました。移動時間を含めて時刻を調整します。`);
 }
-function enableDrag(){if(trip.days[activeDay].events.some(event=>event.editing))return;const list=$("#event-list");let dragged=null;list.querySelectorAll(".event").forEach(el=>{el.addEventListener("dragstart",e=>{dragged=el;el.classList.add("dragging");e.dataTransfer.effectAllowed="move"});el.addEventListener("dragend",()=>{el.classList.remove("dragging");list.querySelectorAll(".drop-target").forEach(x=>x.classList.remove("drop-target"))});el.addEventListener("dragover",e=>{e.preventDefault();if(dragged&&dragged!==el)el.classList.add("drop-target")});el.addEventListener("dragleave",()=>el.classList.remove("drop-target"));el.addEventListener("drop",e=>{e.preventDefault();el.classList.remove("drop-target");if(!dragged||dragged===el)return;const events=trip.days[activeDay].events;const from=events.findIndex(x=>x.id===dragged.dataset.id),to=events.findIndex(x=>x.id===el.dataset.id);const [moved]=events.splice(from,1);events.splice(to,0,moved);renderDay()})})}
+let pendingEventMove=null;
+function openMoveEventDialog(id){
+ const source=trip?.days[activeDay],event=source?.events.find(item=>item.id===id);if(!event)return;
+ const editingDay=trip.days.findIndex(day=>day.events.some(item=>item.editing));if(editingDay>=0){toast(`DAY ${String(editingDay+1).padStart(2,"0")}の編集を保存または取消してから移動してください。`);return}
+ pendingEventMove={trip,id,fromIndex:activeDay};
+ $("#move-event-name").textContent=event.name;const choices=$("#move-day-choices");choices.replaceChildren();
+ trip.days.forEach((day,index)=>{const button=document.createElement("button");button.type="button";button.disabled=index===activeDay;button.textContent=`DAY ${String(index+1).padStart(2,"0")} · ${dateLabel(day.date,{month:"numeric",day:"numeric",weekday:"short"})}${index===activeDay?"（現在）":""}`;button.addEventListener("click",()=>{const pending=pendingEventMove;if(!pending||pending.trip!==trip){$("#move-event-dialog").close();toast("旅程が切り替わりました。カードを選び直してください。");return}if(moveEventToDay(pending.id,pending.fromIndex,index))$("#move-event-dialog").close()});choices.append(button)});
+ $("#move-event-dialog").showModal();
+}
+function moveEventToDay(id,fromIndex,toIndex){
+ if(!trip||fromIndex===toIndex)return false;
+ const editingDay=trip.days.findIndex(day=>day.events.some(event=>event.editing));if(editingDay>=0){toast(`DAY ${String(editingDay+1).padStart(2,"0")}の編集を保存または取消してから移動してください。`);return false}
+ const source=trip.days[fromIndex],target=trip.days[toIndex],index=source?.events.findIndex(event=>event.id===id);if(!source||!target||index<0)return false;
+ const event=source.events[index];
+ // Invalidate in-flight route responses before changing either day's events.
+ routeRequestId++;routesUpdatingAll=false;delete trip.routeProgress;
+ source.events.splice(index,1);target.events.push(event);
+ const eventTime=entry=>{const role=TabiSchedule.journeyRole(entry,trip);return role==="outbound"?-1:role==="return"?1440:(TabiSchedule.clockMinutes(entry.scheduleBaseTime||entry.time)||0)+Number(entry.dayOffset||0)*1440};
+ target.events.sort((a,b)=>eventTime(a)-eventTime(b));
+ delete source.routeData;delete source.scheduleIssues;delete target.routeData;delete target.scheduleIssues;trip.routeModePending=true;activeDay=toIndex;render();
+ const row=[...document.querySelectorAll("#event-list .event")].find(element=>element.dataset.id===id);row?.classList.add("just-moved");row?.scrollIntoView({behavior:"smooth",block:"nearest"});
+ toast(`「${event.name}」をDAY ${String(toIndex+1).padStart(2,"0")}へ移しました。時刻と移動時間を再計算します。`);
+ return true;
+}
+function enableDrag(){if(trip.days[activeDay].events.some(event=>event.editing))return;const list=$("#event-list");let dragged=null;list.querySelectorAll(".event").forEach(el=>{el.addEventListener("dragstart",e=>{dragged=el;el.classList.add("dragging");e.dataTransfer.effectAllowed="move";e.dataTransfer.setData("text/plain",JSON.stringify({id:el.dataset.id,day:activeDay}))});el.addEventListener("dragend",()=>{el.classList.remove("dragging");list.querySelectorAll(".drop-target").forEach(x=>x.classList.remove("drop-target"));document.querySelectorAll(".day-tab.drop-target").forEach(x=>x.classList.remove("drop-target"))});el.addEventListener("dragover",e=>{e.preventDefault();if(dragged&&dragged!==el)el.classList.add("drop-target")});el.addEventListener("dragleave",()=>el.classList.remove("drop-target"));el.addEventListener("drop",e=>{e.preventDefault();el.classList.remove("drop-target");if(!dragged||dragged===el)return;const events=trip.days[activeDay].events;const from=events.findIndex(x=>x.id===dragged.dataset.id),to=events.findIndex(x=>x.id===el.dataset.id);if(from<0||to<0)return;const [moved]=events.splice(from,1);events.splice(to,0,moved);renderDay()})});
+ document.querySelectorAll("#day-tabs .day-tab[data-day]").forEach(tab=>{tab.addEventListener("dragover",event=>{if(!dragged)return;event.preventDefault();tab.classList.add("drop-target")});tab.addEventListener("dragleave",()=>tab.classList.remove("drop-target"));tab.addEventListener("drop",event=>{if(!dragged)return;event.preventDefault();tab.classList.remove("drop-target");moveEventToDay(dragged.dataset.id,activeDay,Number(tab.dataset.day))})})
+}
 function escapeHTML(value){return String(value??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]))}
 function safeOfficialURL(value){
   if(typeof value!=="string"||value.length>2048)return "";
@@ -157,33 +147,20 @@ function safeOfficialURL(value){
 function officialSiteKey(destination,event){return JSON.stringify([destination,event.name,event.place||"",event.origin||""])}
 function currentOfficialSite(destination,event){
   const site=event.officialWebsite,ttl=site?.status==="found"?7*86400000:site?.status==="error"?5*60000:12*3600000;
-  return site?.key===officialSiteKey(destination,event)&&site.checkedAt+ttl>Date.now()?site:null;
+  return site?.key===officialSiteKey(destination,event)&&(site.provided||site.checkedAt+ttl>Date.now())?site:null;
 }
 function renderOfficialSite(row,event,destination){
   const info=row.querySelector(".event-info");if(!info||event.editing)return;
   let holder=info.querySelector(".event-links");if(!holder){holder=document.createElement("div");holder.className="event-links";info.append(holder)}holder.replaceChildren();
   if(event.origin||/移動|戻る|向かう|帰路|往路/.test(event.name))return;
   const site=currentOfficialSite(destination,event),url=site?.status==="found"?safeOfficialURL(site.url):"";
-  if(url){const link=document.createElement("a");link.href=url;link.target="_blank";link.rel="noopener noreferrer";link.textContent="公式サイト ↗";link.title=site.title||event.place||event.name;holder.append(link);return}
-  if(!site){holder.textContent="公式サイトを検索中…";return}
-  if(site.status==="skipped")return;
-  const note=document.createElement("span");note.textContent=site.status==="error"?"公式サイトを検索できませんでした":"公式サイトを確認できませんでした";if(site.error)note.title=site.error;
-  const retry=document.createElement("button");retry.type="button";retry.textContent="再検索";retry.addEventListener("click",()=>updateOfficialSites(true));holder.append(note,retry);
+  if(url){const link=document.createElement("a");link.href=url;link.target="_blank";link.rel="noopener noreferrer";link.textContent=site.provided?"参考サイト（未検証） ↗":"公式サイト ↗";link.title=site.title||event.place||event.name;holder.append(link);return}
+  // Sites supplied by ChatGPT are shown without making background API calls.
+
 }
-async function updateOfficialSites(refresh=false){
-  if(!trip)return;const sourceTrip=trip,day=trip.days[activeDay];if(day.events.some(event=>event.editing))return;
-  const renderLinks=()=>{if(trip!==sourceTrip||trip.days[activeDay]!==day)return;for(const row of document.querySelectorAll("#event-list .event")){const event=day.events.find(item=>item.id===row.dataset.id);if(event)renderOfficialSite(row,event,sourceTrip.destination)}};
-  renderLinks();
-  const needsSearch=day.events.some(event=>!event.origin&&!/移動|戻る|向かう|帰路|往路/.test(event.name)&&(!currentOfficialSite(sourceTrip.destination,event)||refresh&&currentOfficialSite(sourceTrip.destination,event)?.status!=="found"));
-  if(!needsSearch)return;
-  const snapshots=day.events.map(event=>({id:event.id,key:officialSiteKey(sourceTrip.destination,event),name:event.name,place:event.place||"",origin:event.origin||"",kind:event.kind||""}));
-  const key=JSON.stringify([sourceTrip.destination,snapshots.map(({id,...event})=>event)]);
-  let request=officialSiteRequests.get(key);
-  if(!request){request=(async()=>{const response=await fetch("/api/official-sites",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({destination:sourceTrip.destination,refresh,events:snapshots.map(({name,place,origin,kind})=>({name,place,origin,kind}))})});const result=await response.json();if(!response.ok)throw new Error(result.error||"公式サイトを検索できませんでした");return result})();officialSiteRequests.set(key,request)}
-  try{const result=await request;for(const site of result.sites||[]){const snapshot=snapshots[site.index],event=day.events.find(item=>item.id===snapshot?.id);if(!event||officialSiteKey(sourceTrip.destination,event)!==snapshot.key)continue;event.officialWebsite={...site,key:snapshot.key,checkedAt:Date.now()}}}
-  catch(error){for(const snapshot of snapshots){const event=day.events.find(item=>item.id===snapshot.id);if(!event||officialSiteKey(sourceTrip.destination,event)!==snapshot.key||currentOfficialSite(sourceTrip.destination,event)?.status==="found")continue;event.officialWebsite={key:snapshot.key,url:"",status:"error",error:error.message,checkedAt:Date.now()}}}
-  finally{if(officialSiteRequests.get(key)===request)officialSiteRequests.delete(key)}
-  if(trip===sourceTrip){renderLinks();persistDraft()}
+function updateOfficialSites(){
+ if(!trip)return;const day=trip.days[activeDay];
+ for(const row of document.querySelectorAll("#event-list .event")){const event=day.events.find(item=>item.id===row.dataset.id);if(event)renderOfficialSite(row,event,trip.destination)}
 }
 function renderDay(refreshRoutes=true){
   renderDayBase();const tabs=$("#day-tabs");
@@ -205,146 +182,105 @@ function renderDay(refreshRoutes=true){
       const timeLabel=document.createElement("label"),caption=document.createElement("span");timeLabel.className="edit-time-field";caption.textContent="開始時刻";timeLabel.append(caption,time);row.insertBefore(timeLabel,row.querySelector(".event-rail"));
     }else{
       const index=day.events.indexOf(event),editing=day.events.some(item=>item.editing);
-      controls.innerHTML=`<span class="event-reorder" role="group" aria-label="予定の順序"><button type="button" class="event-move-up" data-move="-1" aria-label="${escapeHTML(event.name)}を上へ移動" ${index===0||editing?"disabled":""}>↑</button><button type="button" class="event-move-down" data-move="1" aria-label="${escapeHTML(event.name)}を下へ移動" ${index===day.events.length-1||editing?"disabled":""}>↓</button></span><button type="button" class="event-edit">編集</button><button type="button" class="event-delete">削除</button>`;
+      controls.innerHTML=`<span class="event-reorder" role="group" aria-label="予定の順序"><button type="button" class="event-move-up" data-move="-1" aria-label="${escapeHTML(event.name)}を上へ移動" ${index===0||editing?"disabled":""}>↑</button><button type="button" class="event-move-down" data-move="1" aria-label="${escapeHTML(event.name)}を下へ移動" ${index===day.events.length-1||editing?"disabled":""}>↓</button></span><button type="button" class="event-edit">編集</button><button type="button" class="event-delete">削除</button><button type="button" class="event-move-day" aria-label="${escapeHTML(event.name)}を別の日へ移動" title="${trip.days.length<2?"先に日程を追加してください":"別の日へ移動"}" ${editing||trip.days.length<2?"disabled":""}>別の日へ移動</button>`;
       const grip=row.querySelector(".event-grip");if(grip)controls.append(grip)
     }
-    row.append(controls);controls.querySelectorAll("button").forEach(button=>button.addEventListener("click",()=>{if(button.dataset.move){moveEvent(event.id,Number(button.dataset.move));return}handleEventAction(event.id,button.classList.contains("event-edit")?"edit":button.classList.contains("event-save")?"save":button.classList.contains("event-cancel")?"cancel":"delete")}))
-  });$("#add-day-button").disabled=routesUpdatingAll&&routesUpdatingTrip===trip;if(routesUpdatingAll&&routesUpdatingTrip===trip){tools.querySelectorAll("button").forEach(button=>button.disabled=true);list.querySelectorAll(".event-actions button").forEach(button=>button.disabled=true);list.querySelectorAll(".event").forEach(row=>row.draggable=false)}if(!day.events.some(event=>event.editing)){updateOfficialSites();updateFoodRecommendations();if(refreshRoutes)updateRouteEstimates(Boolean(trip.routeModePending))}drawRouteInfo(day);persistDraft()
-}
-function foodUndoKey(day){return JSON.stringify(day.events.map(event=>[event.id,event.name,event.kind,event.place,event.origin,event.timeLocked,event.scheduleBaseTime||event.time,event.durationManual]))}
-function applyFoodPick(index){
- const sourceTrip=trip,day=trip?.days[activeDay],pick=day?.foodRecommendations?.[index];if(!pick)return;
- if(routesUpdatingAll&&routesUpdatingTrip===trip)return toast("移動時間の更新が終わってからお店を選んでください。");
- const before=structuredClone({events:day.events,routeData:day.routeData,scheduleIssues:day.scheduleIssues});
- const result=TabiSchedule.applyFoodRecommendation(day,pick,{targetId:foodTarget(day)?.id||"",time:day.foodNewTime||"12:00",id:TabiSchedule.createId(),mode:travelMode});
- if(result.error)return toast(result.error);
- day.foodLookupKey=foodSearchKey(day);const appliedKey=foodUndoKey(day);renderDay();toast(`${pick.name}を${result.replaced?"食事予定に入れました":"追加しました"}`,{label:"元に戻す",run:()=>{
-  if(trip!==sourceTrip||!trip.days.includes(day))return toast("元の旅程を開いてからやり直してください。");
-  if(foodUndoKey(day)!==appliedKey)return toast("その後に予定が変更されています。編集から調整してください。");
-  Object.assign(day,before);if(trip.days[activeDay]===day)renderDay();else persistDraft();toast("グルメの変更を元に戻しました");
- }});
+    row.append(controls);controls.querySelectorAll("button").forEach(button=>button.addEventListener("click",()=>{if(button.classList.contains("event-move-day")){openMoveEventDialog(event.id);return}if(button.dataset.move){moveEvent(event.id,Number(button.dataset.move));return}handleEventAction(event.id,button.classList.contains("event-edit")?"edit":button.classList.contains("event-save")?"save":button.classList.contains("event-cancel")?"cancel":"delete")}))
+  });$("#add-day-button").disabled=routesUpdatingAll&&routesUpdatingTrip===trip;if(routesUpdatingAll&&routesUpdatingTrip===trip){tools.querySelectorAll("button").forEach(button=>button.disabled=true);list.querySelectorAll(".event-actions button:not(.event-move-day)").forEach(button=>button.disabled=true);list.querySelectorAll(".event").forEach(row=>row.draggable=false)}if(!day.events.some(event=>event.editing)){updateOfficialSites();if(refreshRoutes)updateRouteEstimates(Boolean(trip.routeModePending))}drawRouteInfo(day);persistDraft()
 }
 function handleEventAction(id,action){const events=trip.days[activeDay].events,index=events.findIndex(event=>event.id===id);if(index<0)return;const event=events[index],row=[...$("#event-list").querySelectorAll(".event")].find(el=>el.dataset.id===id);
   if(action==="edit"){event.original={time:event.time,scheduleBaseTime:event.scheduleBaseTime,dayOffset:event.dayOffset,name:event.name,kind:event.kind,place:event.place,origin:event.origin,duration:event.duration,durationBase:event.durationBase,durationManual:event.durationManual,timeLocked:event.timeLocked};event.editing=true;renderDay();[...$("#event-list").querySelectorAll(".event")].find(el=>el.dataset.id===id)?.querySelector(".event-name-edit")?.focus();return}
   if(action==="cancel"){if(event.isNew)events.splice(index,1);else{Object.assign(event,event.original||{});delete event.original;delete event.editing}renderDay();return}
   if(action==="save"){const name=row.querySelector(".event-name-edit").value.trim(),minutes=Number(row.querySelector(".event-duration-edit").value);if(!name){toast("予定の名前を入力してください");return}if(!Number.isInteger(minutes)||minutes<5||minutes>1440){toast("所要時間は5〜1440分で入力してください");return}const changedDuration=minutes!==eventDurationMinutes(event.original?.duration);event.time=row.querySelector(".event-time-edit").value||"12:00";event.scheduleBaseTime=event.time;event.dayOffset=0;event.timeLocked=row.querySelector(".event-lock-edit").checked;event.name=name;event.kind=row.querySelector(".event-kind-edit").value.trim()||"自由時間";event.place=row.querySelector(".event-place-edit").value.trim();event.origin=row.querySelector(".event-origin-edit").value.trim();event.duration=durationLabel(minutes);event.durationBase=changedDuration?event.duration:event.original?.durationBase;event.durationManual=changedDuration||Boolean(event.original?.durationManual);delete event.original;delete event.editing;delete event.isNew;renderDay();return}events.splice(index,1);renderDay()
 }
-$("#day-content").addEventListener("click",event=>{if(event.target.closest("[data-food-retry]")){updateFoodRecommendations(true);return}const button=event.target.closest(".food-pick-button");if(button&&!button.disabled)applyFoodPick(Number(button.dataset.foodPick))});
-$("#day-content").addEventListener("toggle",event=>{if(!event.target.matches(".food-picks"))return;const day=trip?.days[activeDay];if(!day)return;day.foodExpanded=event.target.open;persistDraft()},true);
-$("#day-content").addEventListener("change",event=>{const day=trip?.days[activeDay];if(!day)return;if(event.target.id==="food-target"){day.foodTargetId=event.target.value;renderDay(false)}if(event.target.id==="food-new-time"){day.foodNewTime=event.target.value;renderDay(false)}});
+$("#day-content").addEventListener("toggle",event=>{if(!event.target.matches(".day-map-stops"))return;const day=trip?.days[activeDay];if(day){day.mapExpanded=event.target.open;persistDraft()}},true);
 function addEvent(){const events=trip.days[activeDay].events;events.push({id:`custom-${Date.now()}-${Math.random().toString(36).slice(2,6)}`,name:"新しい予定",kind:"場所やメモを追加",emoji:"✦",duration:"約1時間",place:"",time:"12:00",scheduleBaseTime:"12:00",editing:true,isNew:true});renderDay();$("#event-list .event:last-of-type .event-name-edit")?.focus()}
 function copyPreviousDay(){if(activeDay<1)return;const source=trip.days[activeDay-1],target=trip.days[activeDay];if(target.events.length&&!window.confirm("この日の予定を前日の予定で置き換えますか？"))return;const journeys=target.events.filter(event=>TabiSchedule.journeyRole(event,trip)!=="local");target.events=source.events.filter(event=>TabiSchedule.journeyRole(event,trip)==="local").map(event=>{const copy={...event,id:TabiSchedule.createId()};delete copy.editing;delete copy.original;delete copy.isNew;return copy});target.events.unshift(...journeys.filter(event=>TabiSchedule.journeyRole(event,trip)==="outbound"));target.events.push(...journeys.filter(event=>TabiSchedule.journeyRole(event,trip)==="return"));delete target.routeData;renderDay();toast("前日の予定をコピーしました。往路と帰路は保持しています。")}
-async function addDay(){if(trip.days.length>=21){toast("旅程は最大21日までです");return}const button=$("#add-day-button"),next=new Date(trip.days[trip.days.length-1].date);button.disabled=true;next.setDate(next.getDate()+1);const date=localISO(next);try{const response=await fetch("/api/itinerary",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...trip,startDate:date,endDate:date,extension:true})});const result=await response.json();if(!response.ok)throw new Error(result.error||"予定を作成できませんでした。");const day=result.days?.[0];if(!day)throw new Error("APIから予定を受け取れませんでした。");const events=day.events.map((event,index)=>({...event,durationMode:travelMode,id:`ai-${Date.now()}-extra-${index}`}));if(trip.departurePoint)trip.days[trip.days.length-1].events=trip.days[trip.days.length-1].events.filter(event=>TabiSchedule.journeyRole(event,trip)!=="return");trip.days.push({date:parseLocal(date),summary:day.summary||"追加した日のおすすめプラン",foodRecommendations:day.foodRecommendations||[],events});trip.endDate=date;$("#end-date").value=date;activeDay=trip.days.length-1;trip.category=result.category||trip.category;render();$("#results").scrollIntoView({behavior:"smooth",block:"start"})}catch(error){toast(error.message||"予定を作成できませんでした。")}finally{if($("#add-day-button"))$("#add-day-button").disabled=false}}
+function addDay(){
+ if(trip.days.length>=21){toast("旅程は最大21日までです");return}
+ const previous=trip.days.at(-1),next=new Date(previous.date);next.setDate(next.getDate()+1);
+ const returns=previous.events.filter(event=>TabiSchedule.journeyRole(event,trip)==="return");previous.events=previous.events.filter(event=>!returns.includes(event));delete previous.routeData;
+ trip.days.push({date:next,summary:"追加した日。予定を自由に入れてください。",events:returns});trip.endDate=localISO(next);$("#end-date").value=trip.endDate;activeDay=trip.days.length-1;trip.routeModePending=true;render();toast("日程を追加しました。予定を追加するか、ChatGPTへ相談できます。");
+}
 function removeDay(){if(trip.days.length<=1){toast("日程は1日以上必要です");return}TabiSchedule.removeDay(trip,activeDay);$("#end-date").value=trip.endDate;activeDay=Math.min(activeDay,trip.days.length-1);trip.routeModePending=true;render();toast("日程を削除し、往路と帰路を残った日程へ移しました。")}
-function readForm(){return {departurePoint:$("#departure-point").value.trim(),destination:$("#destination").value,startDate:$("#start-date").value,endDate:$("#end-date").value,pace:$("#pace").value,interests:[...document.querySelectorAll("#interest-chips input:checked")].map(x=>x.value)}}
-function setGenerationMessage(state,message,detail=""){
- const panel=$("#generation-panel");panel.hidden=false;panel.dataset.state=state;$("#generation-status").textContent=message;$("#generation-detail").textContent=detail;$("#cancel-generation").hidden=state!=="busy";
-}
-function cancelGeneration(silent=false){if(generationRequest){generationRequest.silent=silent;generationRequest.controller.abort()}}
-$("#cancel-generation").addEventListener("click",()=>cancelGeneration());
-async function generate(scroll=true){
- if(generationRequest)return;
- const data={...readForm(),travelMode},mode=travelMode;
- if(!data.destination.trim())return toast("行き先を入力してください");if(!data.startDate||!data.endDate)return toast("出発日と帰着日を設定してください");
- const count=dayCount(data.startDate,data.endDate);if(!Number.isFinite(count)||count<1||count>21)return toast("旅行日数は1〜21日の範囲で設定してください。");
- if(destinationSuggestionController){destinationSuggestionController.abort();destinationSuggestionController=null;$("#suggest-destinations-button").textContent="日程からおすすめを見る ↗";$("#destination-suggestions").setAttribute("aria-busy","false");$("#destination-suggestion-status").textContent="候補検索を中止して、旅程を作成しています。"}
- const button=$("#planner-form .primary-button"),original=button.innerHTML,repeat=$("#regenerate-button");
- const controls=[...document.querySelectorAll("#planner-form input, #planner-form select")].map(element=>[element,element.disabled]);controls.forEach(([element])=>element.disabled=true);
- const request={controller:new AbortController(),startedAt:Date.now(),silent:false};generationRequest=request;
- button.disabled=true;repeat.disabled=true;$("#suggest-destinations-button").disabled=true;button.innerHTML="<span>◌</span> 旅程を作成中…";
- const progress=()=>{const elapsed=Math.floor((Date.now()-request.startedAt)/1000);setGenerationMessage("busy",`${count}日間の旅程を作成しています · ${elapsed}秒`,elapsed<30?"日程を先に表示し、移動時間・公式サイト・グルメ候補を順次確認します。":"作成を続けています。長い旅程は数分かかることがあります。このまま待つか、中止して条件を変更できます。")};
- progress();const timer=setInterval(progress,1000),deadline=setTimeout(()=>{request.timedOut=true;request.controller.abort()},310000);
+function readForm(){return {destination:$("#destination").value,startDate:$("#start-date").value,endDate:$("#end-date").value,pace:$("#pace").value,interests:[...document.querySelectorAll("#interest-chips input:checked")].map(x=>x.value)}}
+function generate(scroll=true,refine=false){
  try{
-  const response=await fetch("/api/itinerary",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(data),signal:request.controller.signal});const result=await response.json();
-  if(request.controller.signal.aborted)throw new Error("cancelled");
-  if(!response.ok)throw new Error(result.error||"旅程を生成できませんでした。");
-  if(!Array.isArray(result.days)||result.days.length!==count)throw new Error("APIから日数の合わない旅程が返りました。もう一度お試しください。");
-  if(trip)flushDraft();cancelFoodSearches();
-  trip={...data,initialTravelMode:mode,id:TabiSchedule.createId(),category:result.category||"AIが提案する旅",days:result.days.map((day,index)=>{const date=parseLocal(data.startDate);date.setDate(date.getDate()+index);return {date,summary:day.summary||"この日のおすすめプラン",foodRecommendations:day.foodRecommendations||[],events:day.events.map((event,eventIndex)=>({...event,durationMode:mode,id:`ai-${Date.now()}-${index}-${eventIndex}`}))}})};
-  activeDay=0;render();setGenerationMessage("done","旅程を作成しました。","移動時間・公式サイト・グルメ候補は日程の表示後に順次確認します。");if(scroll)$("#results").scrollIntoView({behavior:"smooth",block:"start"});
- }catch(error){
-  if(!request.silent){if(request.controller.signal.aborted&&!request.timedOut)setGenerationMessage("cancelled","作成を中止しました。","入力内容を保っています。条件を変えて、もう一度作成できます。");else setGenerationMessage("error",request.timedOut?"応答を受け取れませんでした。":error.message||"旅程を生成できませんでした。","入力内容を保っています。もう一度お試しください。")}
- }finally{
-  clearInterval(timer);clearTimeout(deadline);if(generationRequest===request)generationRequest=null;
-  controls.forEach(([element,disabled])=>element.disabled=disabled);button.disabled=false;button.innerHTML=original;repeat.disabled=!trip;$("#suggest-destinations-button").disabled=false;$("#cancel-generation").hidden=true;
- }
+  const conditions={...readForm(),travelMode};
+  let text=TabiImport.prompt(conditions);
+  if(refine&&trip){const current={...conditions,category:trip.category,days:trip.days.map(day=>({date:localISO(day.date),summary:day.summary,foodRecommendations:day.foodRecommendations||[],events:day.events.map(event=>({name:event.name,time:event.scheduleBaseTime||event.time,kind:event.kind,place:event.place||"",origin:event.origin||"",journeyRole:event.journeyRole||"local",durationMinutes:eventDurationMinutes(event.duration),timeLocked:Boolean(event.timeLocked),officialUrl:currentOfficialSite(trip.destination,event)?.url||""}))}))};text+="\n\n現在の旅程です。これを元に私の要望を聞いて改善し、最後に変更後の全日程を同じJSON形式で出力してください。\n"+JSON.stringify(current)}
+  showChatGPTPrompt(text,scroll);
+ }catch(error){showImportError(error.message)}
 }
-let destinationSuggestions=[],destinationSuggestionKey="",destinationSuggestionController=null;
+let pendingImport=null,importApplying=false;
+function showImportError(message){const box=$("#chatgpt-import-error");box.hidden=false;box.textContent=message}
+function showChatGPTPrompt(text,scroll=true){
+ $("#chatgpt-prompt").value=text;$("#chatgpt-prompt-panel").hidden=false;$("#chatgpt-import-error").hidden=true;
+ $("#chatgpt-copy-status").textContent="依頼文をコピーして、ChatGPTに貼り付けてください。";
+ if(scroll)$("#chatgpt-prompt-panel").scrollIntoView({behavior:"smooth",block:"center"});$("#copy-chatgpt-prompt").focus();
+}
+async function copyChatGPTPrompt(){
+ const field=$("#chatgpt-prompt"),status=$("#chatgpt-copy-status");
+ try{if(!navigator.clipboard?.writeText)throw Error();await navigator.clipboard.writeText(field.value);status.textContent="コピーしました。「ChatGPTを開く」から貼り付けてください。"}
+ catch{field.focus();field.select();status.textContent="依頼文を選択しました。コピー（Ctrl+C、スマホは長押し）してChatGPTに貼り付けてください。"}
+}
+function previewChatGPTJSON(){
+ pendingImport=null;$("#chatgpt-import-preview").hidden=true;$("#chatgpt-import-error").hidden=true;
+ try{
+  const raw=$("#chatgpt-json").value,result=TabiImport.parse(raw),plan=result.trip;
+  const warnings=[...result.warnings],conditions=readForm();
+  if(plan.destination!==conditions.destination.trim()||plan.startDate!==conditions.startDate||plan.endDate!==conditions.endDate)warnings.unshift("入力欄と行き先または日程が違います。取り込むJSONの条件を下に表示しています。");
+  $("#chatgpt-preview-content").innerHTML=`<p class="import-preview-title">${escapeHTML(plan.departurePoint?`${plan.departurePoint} → `:"")}${escapeHTML(plan.destination)}</p><p>${escapeHTML(dateRange(plan.startDate,plan.endDate))} · ${plan.days.length}日間 · ${plan.days.reduce((sum,day)=>sum+day.events.length,0)}件の予定</p>${warnings.length?`<ul class="import-warnings">${warnings.map(value=>`<li>${escapeHTML(value)}</li>`).join("")}</ul>`:""}<div class="import-preview-days">${plan.days.map((day,index)=>`<details ${index===0?"open":""}><summary>DAY ${pad(index+1)} · ${escapeHTML(day.date)} · ${day.events.length}件</summary><p>${escapeHTML(day.summary)}</p><ul>${day.events.map(event=>`<li><time>${escapeHTML(event.time)}</time><div><strong>${escapeHTML(event.name)}</strong><small>${escapeHTML(event.place||"場所未設定")} · ${escapeHTML(event.duration)}</small></div></li>`).join("")}</ul>${day.foodRecommendations.length?`<p class="import-caption">グルメ候補：${day.foodRecommendations.map(pick=>escapeHTML(pick.name)).join("、")}</p>`:""}</details>`).join("")}</div>`;
+  pendingImport={raw,plan};$("#chatgpt-import-preview").hidden=false;$("#chatgpt-import-preview").scrollIntoView({behavior:"smooth",block:"start"});
+ }catch(error){showImportError(error.message)}
+}
+function createImportedTrip(plan){
+ const imported={...plan,id:TabiSchedule.createId(),source:"chatgpt-json",initialTravelMode:plan.travelMode,days:plan.days.map(day=>({...day,date:parseLocal(day.date),events:day.events.map(event=>({...event,id:TabiSchedule.createId(),durationMode:plan.travelMode}))}))};
+ for(const day of imported.days)for(const event of day.events){if(event.officialUrl)event.officialWebsite={url:event.officialUrl,title:event.name,status:"found",provided:true,key:officialSiteKey(imported.destination,event),checkedAt:Date.now()};delete event.officialUrl}
+ return imported;
+}
+async function applyChatGPTJSON(){
+ if(importApplying)return;
+ if(!pendingImport||pendingImport.raw!==$("#chatgpt-json").value){previewChatGPTJSON();return}
+ if(trip?.days.some(day=>day.events.some(event=>event.editing))){showImportError("予定の編集を保存または取消してから取り込んでください。");return}
+ const plan=pendingImport.plan,sourceTrip=trip,button=$("#apply-chatgpt-json");importApplying=true;button.disabled=true;button.textContent="データベースに保存中…";
+ $("#chatgpt-import-error").hidden=true;$(".app-shell").inert=true;
+ try{
+  if(sourceTrip){await flushDraft();const preserved=await fetch("/api/storage/saved",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({trip:serializeTrip({...sourceTrip,activeDay})})});if(!preserved.ok)throw Error("現在の旅程を保存できませんでした。接続を確認して再試行してください。");updateStorageLists(await preserved.json())}
+  if(trip!==sourceTrip)throw Error("旅程が切り替わりました。もう一度内容を確認してください。");
+  const imported=createImportedTrip(plan),snapshot=serializeTrip({...imported,activeDay:0});
+  // Queue behind any pending autosave, so an older draft cannot replace the imported one.
+  clearTimeout(draftTimer);routeRequestId++;routesUpdatingAll=false;await draftQueue;
+  const response=await fetch("/api/storage/draft",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({draft:snapshot})});if(!response.ok)throw Error("取り込む旅程を保存できませんでした。再試行してください。");
+  restoreDraft(snapshot,{flushCurrent:false});pendingImport=null;$("#chatgpt-import-preview").hidden=true;$("#chatgpt-json").value="";$("#results").scrollIntoView({behavior:"smooth",block:"start"});toast("旅程を取り込み、データベースに保存しました。");
+ }catch(error){showImportError(error.message||"旅程を取り込めませんでした。")}
+ finally{importApplying=false;$(".app-shell").inert=false;if(trip)persistDraft();button.disabled=false;button.textContent="この旅程を取り込む"}
+}
+$("#copy-chatgpt-prompt").addEventListener("click",copyChatGPTPrompt);
+$("#preview-chatgpt-json").addEventListener("click",previewChatGPTJSON);
+$("#apply-chatgpt-json").addEventListener("click",applyChatGPTJSON);
+$("#chatgpt-json").addEventListener("input",()=>{pendingImport=null;$("#chatgpt-import-preview").hidden=true;$("#chatgpt-import-error").hidden=true});
 function startNewTrip(){
- cancelGeneration(true);cancelFoodSearches();if(trip)flushDraft();$("#generation-panel").hidden=true;
- destinationSuggestionController?.abort();destinationSuggestionController=null;destinationSuggestionKey="";destinationSuggestions=[];
- const list=$("#destination-suggestions");list.replaceChildren();list.hidden=true;list.setAttribute("aria-busy","false");
- $("#destination-suggestion-status").textContent="上の日程を使って、行き先のおすすめを表示します。出発地を入れると移動のしやすさも考慮します。";
- const suggestButton=$("#suggest-destinations-button");suggestButton.disabled=false;suggestButton.textContent="日程からおすすめを見る ↗";
+ if(trip)flushDraft();pendingImport=null;$("#chatgpt-import-preview").hidden=true;$("#chatgpt-prompt-panel").hidden=true;$("#chatgpt-json").value="";$("#chatgpt-import-error").hidden=true;
  $("#destination").value="";const start=new Date();start.setDate(start.getDate()+14);const end=new Date(start);end.setDate(end.getDate()+2);
  $("#start-date").value=localISO(start);$("#start-date").min=localISO(new Date());$("#end-date").value=localISO(end);$("#end-date").min=localISO(start);
- if(routesUpdatingAll){routeRequestId++;routesUpdatingAll=false;routesUpdatingTrip=null;routesUpdatingMode=null;routeUpdatePromise=Promise.resolve()}
- trip=null;activeDay=0;renderEmpty();$("#route-status").textContent="旅程を作成すると、日ごとの移動時間を表示します。";$("#route-retry").hidden=true;
- $("#planner-form .primary-button").focus();toast("行き先を入力するか、日程からおすすめをご覧ください。");
+ routeRequestId++;routesUpdatingAll=false;routesUpdatingTrip=null;routesUpdatingMode=null;routeUpdatePromise=Promise.resolve();
+ trip=null;activeDay=0;renderEmpty();$("#route-retry").hidden=true;
+ $("#destination").focus();toast("条件を入れて、ChatGPTへの依頼文を作ってください。");
 }
 $("#start-new-trip").addEventListener("click",startNewTrip);
-function suggestionConditions(){const {departurePoint,startDate,endDate,pace,interests}=readForm();return {departurePoint,startDate,endDate,pace,interests,scope:$("#destination-scope").value,travelMode:$("#route-mode").value}}
-function suggestionKey(){return JSON.stringify(suggestionConditions())}
-function invalidateDestinationSuggestions(){
- if(!destinationSuggestionKey||destinationSuggestionKey===suggestionKey())return;
- destinationSuggestionController?.abort();destinationSuggestionController=null;destinationSuggestionKey="";destinationSuggestions=[];
- $("#destination-suggestions").hidden=true;$("#destination-suggestions").replaceChildren();$("#destination-suggestions").setAttribute("aria-busy","false");
- $("#suggest-destinations-button").disabled=false;$("#suggest-destinations-button").textContent="日程からおすすめを見る ↗";
- $("#destination-suggestion-status").textContent="条件が変わりました。新しい日程・好みで、もう一度おすすめを見ることができます。";
-}
-function renderDestinationSuggestions(){
- const list=$("#destination-suggestions");list.hidden=!destinationSuggestions.length;
- list.innerHTML=destinationSuggestions.map((item,index)=>{
-  const selected=$("#destination").value.trim()===item.name,url=safeOfficialURL(item.url);
-  return `<article class="destination-option ${selected?"is-selected":""}"><div class="destination-option-top"><span class="destination-option-number">${String(index+1).padStart(2,"0")}</span><span>${escapeHTML(item.region)}</span></div><h3>${escapeHTML(item.name)}</h3><p class="destination-reason">${escapeHTML(item.reason)}</p><div class="destination-highlights">${item.highlights.map(value=>`<span>${escapeHTML(value)}</span>`).join("")}</div><dl><div><dt>この季節の魅力</dt><dd>${escapeHTML(item.seasonalHighlight)}</dd></div><div><dt>移動・過ごし方</dt><dd>${escapeHTML(item.travelHint)}</dd></div></dl>${url?`<a class="destination-source" href="${escapeHTML(url)}" target="_blank" rel="noopener noreferrer">${escapeHTML(item.sourceTitle)} ↗</a>`:""}<button type="button" data-destination-index="${index}" aria-pressed="${selected}" aria-label="${escapeHTML(item.name)}を行き先に設定">${selected?"✓ 行き先に設定済み":"この行き先を使う"}</button></article>`;
- }).join("");
-}
-async function suggestDestinations(){
- const conditions=suggestionConditions(),count=dayCount(conditions.startDate,conditions.endDate),status=$("#destination-suggestion-status");
- if(!conditions.startDate||!conditions.endDate||!Number.isFinite(count)||count<1||count>21){status.textContent="出発日と帰着日を、1〜21日の日程で設定してください。";$("#start-date").focus();return}
- if($("#planner-form .primary-button").disabled){toast("旅程の生成が終わってから、行き先を探してください。");return}
- destinationSuggestionController?.abort();const controller=new AbortController();destinationSuggestionController=controller;
- destinationSuggestionKey=JSON.stringify(conditions);destinationSuggestions=[];
- const button=$("#suggest-destinations-button"),list=$("#destination-suggestions");button.disabled=true;button.textContent="行き先を探しています…";list.replaceChildren();list.hidden=true;list.setAttribute("aria-busy","true");
- status.textContent="季節と日程に合う行き先を調べています。少しお待ちください。";
- try{
-  const response=await fetch("/api/destinations",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(conditions),signal:controller.signal});const result=await response.json();
-  if(controller.signal.aborted)return;if(destinationSuggestionKey!==suggestionKey()){invalidateDestinationSuggestions();return}
-  if(!response.ok)throw new Error(result.error||"行き先を提案できませんでした。");
-  if(!Array.isArray(result.destinations)||!result.destinations.length)throw new Error("この日程に合う候補がありませんでした。日程や旅の範囲を変えてお試しください。");
-  destinationSuggestions=result.destinations;renderDestinationSuggestions();status.textContent=`${dateRange(conditions.startDate,conditions.endDate)}・${count}日間に合う${destinationSuggestions.length}候補。行き先を選び、「旅程をつくる」で予定を作成できます。`;
- }catch(error){if(!controller.signal.aborted)status.textContent=error.message||"行き先を提案できませんでした。もう一度お試しください。"}
- finally{if(destinationSuggestionController===controller){destinationSuggestionController=null;button.disabled=false;button.textContent="日程からおすすめを見る ↗";list.setAttribute("aria-busy","false")}}
-}
-$("#suggest-destinations-button").addEventListener("click",suggestDestinations);
-$("#planner-form").addEventListener("input",event=>{if(event.target.id==="destination"){if(destinationSuggestions.length)renderDestinationSuggestions()}else invalidateDestinationSuggestions()});
-$("#planner-form").addEventListener("change",invalidateDestinationSuggestions);
-$("#route-mode").addEventListener("change",invalidateDestinationSuggestions);
-$("#destination-suggestions").addEventListener("click",event=>{
- const button=event.target.closest("button[data-destination-index]");if(!button)return;
- if(destinationSuggestionKey!==suggestionKey()){invalidateDestinationSuggestions();return}
- if($("#planner-form .primary-button").disabled){toast("旅程の生成が終わってから行き先を選んでください。");return}
- const item=destinationSuggestions[Number(button.dataset.destinationIndex)];if(!item)return;
- $("#destination").value=item.name;renderDestinationSuggestions();$("#planner-form .primary-button").focus();toast(`${item.name}を行き先に設定しました。「旅程をつくる」で予定を作成できます。`);
-});
-async function openSavedDialog(){if(trip)await flushDraft();savedView="active";renderSavedTrips();$("#saved-dialog").showModal()}
-function updateStorageLists(data){savedTrips=data.saved||[];deletedTrips=data.deleted||[];updateSaved();if($("#saved-dialog").open)renderSavedTrips()}
+$("#planner-form").addEventListener("input",event=>{if(!event.target.closest(".form-grid,.interest-row"))return;if(!$("#chatgpt-prompt-panel").hidden)$("#chatgpt-copy-status").textContent="条件が変わりました。最新の条件で依頼文を作り直してください。"});
+async function openSavedDialog(){if(trip)await flushDraft();renderSavedTrips();$("#saved-dialog").showModal()}
+function updateStorageLists(data){savedTrips=data.saved||[];updateSaved();if($("#saved-dialog").open)renderSavedTrips()}
 function renderSavedTrips(){
- const list=$("#saved-trip-list"),empty=$("#saved-dialog-empty"),items=savedView==="deleted"?deletedTrips:savedTrips;list.replaceChildren();empty.hidden=items.length>0;empty.textContent=savedView==="deleted"?"削除した旅程はありません。":"保存した旅程はまだありません。";
- $("#saved-view-active").setAttribute("aria-pressed",String(savedView==="active"));$("#saved-view-deleted").setAttribute("aria-pressed",String(savedView==="deleted"));
- for(const item of items){const row=document.createElement("article"),open=document.createElement(savedView==="active"?"button":"div"),copy=document.createElement("span"),title=document.createElement("strong"),summary=document.createElement("span"),action=document.createElement("button");row.className="saved-trip-row";open.className="saved-trip-open";title.className="saved-trip-title";title.textContent=item.departurePoint?`${item.departurePoint} → ${item.destination}`:item.destination;copy.className="saved-trip-summary";summary.textContent=`${dateRange(item.startDate,item.endDate)} ・ ${item.days.length}日間`;copy.append(title,summary);open.append(copy);action.type="button";action.className=savedView==="deleted"?"saved-trip-restore":"saved-trip-delete";action.textContent=savedView==="deleted"?"復元":"削除";action.setAttribute("aria-label",`${item.destination}の旅程を${action.textContent}`);
- if(savedView==="active"){open.type="button";open.addEventListener("click",()=>{restoreDraft({...item,activeDay:0});$("#saved-dialog").close();$("#results").scrollIntoView({behavior:"smooth"})});action.addEventListener("click",()=>deleteSavedTrip(item))}else action.addEventListener("click",()=>restoreSavedTrip(item));row.append(open,action);list.append(row)}
+ const list=$("#saved-trip-list"),empty=$("#saved-dialog-empty");list.replaceChildren();empty.hidden=savedTrips.length>0;
+ for(const item of savedTrips){const row=document.createElement("article"),open=document.createElement("button"),copy=document.createElement("span"),title=document.createElement("strong"),summary=document.createElement("span"),action=document.createElement("button");row.className="saved-trip-row";open.className="saved-trip-open";title.className="saved-trip-title";title.textContent=item.departurePoint?`${item.departurePoint} → ${item.destination}`:item.destination;copy.className="saved-trip-summary";summary.textContent=`${dateRange(item.startDate,item.endDate)} ・ ${item.days.length}日間`;copy.append(title,summary);open.append(copy);open.type="button";open.addEventListener("click",()=>{restoreDraft({...item,activeDay:0});$("#saved-dialog").close();$("#results").scrollIntoView({behavior:"smooth"})});action.type="button";action.className="saved-trip-delete";action.textContent="削除";action.setAttribute("aria-label",`${item.destination}の旅程を削除`);action.addEventListener("click",()=>deleteSavedTrip(item));row.append(open,action);list.append(row)}
 }
-async function deleteSavedTrip(item){deletingTripIds.add(item.id);try{if(trip?.id===item.id){clearTimeout(draftTimer);await draftQueue}const response=await fetch(`/api/storage/saved?${new URLSearchParams({id:item.id})}`,{method:"DELETE"});if(!response.ok)throw new Error("旅程を削除できませんでした");updateStorageLists(await response.json());toast("旅程を削除しました",{label:"元に戻す",run:()=>restoreSavedTrip(item)})}catch(error){toast(error.message)}finally{deletingTripIds.delete(item.id)}}
-async function restoreSavedTrip(item){try{const response=await fetch("/api/storage/saved/restore",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:item.id})});if(!response.ok)throw new Error("旅程を復元できませんでした");updateStorageLists(await response.json());toast("旅程を復元しました")}catch(error){toast(error.message)}}
-function updateSaved(){$("#saved-count").textContent=savedTrips.length;$("#mobile-saved-count").textContent=savedTrips.length;const button=$("#save-button");if(!trip)return;const exists=savedTrips.some(x=>x.id===trip.id);button.disabled=exists||routesUpdatingAll;button.classList.toggle("is-saved",exists);button.innerHTML=exists?"<span>✓</span> 一覧に追加済み":"<span>♡</span> 保存した旅に追加";renderDraftStatus()}
+async function deleteSavedTrip(item){deletingTripIds.add(item.id);try{if(trip?.id===item.id){clearTimeout(draftTimer);await draftQueue}const response=await fetch(`/api/storage/saved?${new URLSearchParams({id:item.id})}`,{method:"DELETE"});if(!response.ok)throw new Error("旅程を削除できませんでした");updateStorageLists(await response.json());toast("旅程を削除しました")}catch(error){toast(error.message)}finally{deletingTripIds.delete(item.id)}}
+function updateSaved(){$("#saved-count").textContent=savedTrips.length;$("#mobile-saved-count").textContent=savedTrips.length;const button=$("#save-button");if(!trip)return;const exists=savedTrips.some(x=>x.id===trip.id);button.disabled=exists||routesUpdatingAll;button.classList.toggle("is-saved",exists);button.innerHTML=exists?"<span>✓</span> 保存済み":"<span>♡</span> 保存";renderDraftStatus()}
 async function saveTrip(){if(!trip||savedTrips.some(item=>item.id===trip.id)||routesUpdatingAll)return;const button=$("#save-button"),sourceTrip=trip;button.disabled=true;try{const response=await fetch("/api/storage/saved",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({trip:serializeTrip({...sourceTrip,activeDay})})});if(!response.ok)throw new Error("旅程を保存できませんでした");const data=await response.json();sourceTrip.id=data.trip.id;updateStorageLists(data);toast("「保存した旅」の一覧に追加しました")}catch(error){toast(error.message)}finally{updateSaved()}}
 function toast(message,action){const el=$("#toast"),text=document.createElement("span");text.textContent=message;el.replaceChildren(text);if(action){const button=document.createElement("button");button.type="button";button.textContent=action.label;button.addEventListener("click",action.run);el.append(button)}el.classList.add("show");clearTimeout(toastTimer);toastTimer=setTimeout(()=>el.classList.remove("show"),action?20000:3200)}
-async function copyTrip(){
- if(!trip)return;if(trip.days.some(day=>day.events.some(event=>event.editing))){toast("予定の編集を保存してからコピーしてください");return}
- const sourceTrip=trip,mode=travelMode;await updateRouteEstimates(true);if(trip!==sourceTrip||travelMode!==mode){toast("旅程が切り替わりました。もう一度コピーしてください");return}if(trip.routeModePending){toast("全日程の移動時間を更新してからコピーしてください");return}
- const text=`${trip.departurePoint?`${trip.departurePoint} → `:""}${trip.destination}の旅程\n${dateRange(trip.startDate,trip.endDate)}\n移動手段：${{TRANSIT:"電車・バス",WALK:"徒歩",DRIVE:"車"}[travelMode]}\n\n${trip.days.map((day,i)=>`DAY ${i+1} ${dateLabel(day.date,{month:"numeric",day:"numeric",weekday:"long"})}\n${day.events.map((e,index)=>`${index?`${TabiSchedule.travelLabel(day.routeData.result.segments.find(item=>item.index===index-1),travelMode)}\n`:""}${TabiSchedule.clockLabel((TabiSchedule.clockMinutes(e.time)||0)+Number(e.dayOffset||0)*1440)} ${e.name} (${e.duration})${e.timeLocked?"［時刻固定］":""}${safeOfficialURL(currentOfficialSite(trip.destination,e)?.url)?`\n  公式サイト：${safeOfficialURL(currentOfficialSite(trip.destination,e)?.url)}`:""}`).join("\n")}${day.scheduleIssues?.length?`\n注意：${day.scheduleIssues.map(issue=>issue.message).join(" / ")}`:""}`).join("\n\n")}\n\n※ 移動時間は概算です。天気・営業時間・交通機関を事前にご確認ください。`;
- try{await navigator.clipboard.writeText(text);toast("旅程をコピーしました")}catch{toast("この環境ではコピーできませんでした")}
-}
-$("#budget-card").addEventListener("input",()=>{if(!trip)return;trip.budget={people:Number($("#budget-people").value)||1,lodging:Number($("#budget-lodging").value)||0,meals:Number($("#budget-meals").value)||0,localTransit:Number($("#budget-local-transit").value)||0,admission:Number($("#budget-admission").value)||0,intercity:Number($("#budget-intercity").value)||0};renderBudget();persistDraft()});
-document.querySelectorAll(".chip input").forEach(input=>input.addEventListener("change",()=>input.closest(".chip").classList.toggle("selected",input.checked)));$("#planner-form").addEventListener("submit",e=>{e.preventDefault();generate()});$("#regenerate-button").addEventListener("click",()=>generate());$("#save-button").addEventListener("click",saveTrip);$("#share-button").addEventListener("click",copyTrip);$("#saved-nav").addEventListener("click",openSavedDialog);$("#mobile-saved-nav").addEventListener("click",openSavedDialog);$("#saved-view-active").addEventListener("click",()=>{savedView="active";renderSavedTrips()});$("#saved-view-deleted").addEventListener("click",()=>{savedView="deleted";renderSavedTrips()});$("#route-retry").addEventListener("click",()=>updateRouteEstimates(true));$("#saved-dialog-close").addEventListener("click",()=>$("#saved-dialog").close());$("#saved-dialog").addEventListener("click",event=>{if(event.target===$("#saved-dialog"))$("#saved-dialog").close()});$("#route-mode").addEventListener("change",event=>{if(trip?.days.some(day=>day.events.some(item=>item.editing))){event.target.value=travelMode;toast("予定の編集を保存してから移動手段を変更してください");return}travelMode=event.target.value;if(trip){trip.travelMode=travelMode;persistDraft();updateRouteEstimates(true)}});initializeDates();renderEmpty();initializeStorage();checkApiStatus();
+$("#move-event-dialog-close").addEventListener("click",()=>$("#move-event-dialog").close());
+$("#move-event-dialog").addEventListener("click",event=>{if(event.target===$("#move-event-dialog"))$("#move-event-dialog").close()});
+$("#move-event-dialog").addEventListener("close",()=>{const id=pendingEventMove?.id;pendingEventMove=null;const row=[...document.querySelectorAll("#event-list .event")].find(element=>element.dataset.id===id);row?.querySelector(".event-move-day")?.focus()});
+document.querySelectorAll(".chip input").forEach(input=>input.addEventListener("change",()=>input.closest(".chip").classList.toggle("selected",input.checked)));$("#planner-form").addEventListener("submit",e=>{e.preventDefault();generate()});$("#save-button").addEventListener("click",saveTrip);$("#saved-nav").addEventListener("click",openSavedDialog);$("#mobile-saved-nav").addEventListener("click",openSavedDialog);$("#route-retry").addEventListener("click",()=>updateRouteEstimates(true));$("#saved-dialog-close").addEventListener("click",()=>$("#saved-dialog").close());$("#saved-dialog").addEventListener("click",event=>{if(event.target===$("#saved-dialog"))$("#saved-dialog").close()});initializeDates();renderEmpty();initializeStorage();

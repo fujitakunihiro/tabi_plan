@@ -15,7 +15,7 @@ function httpBrowser() {
   const context = vm.createContext({
     // Ordinary HTTP exposes getRandomValues, but not randomUUID.
     crypto: { getRandomValues: bytes => webcrypto.getRandomValues(bytes) },
-    console, structuredClone, AbortController, setTimeout, clearTimeout, setInterval, clearInterval,
+    console, structuredClone, AbortController, TabiImport:require("../chatgpt-import"), setTimeout, clearTimeout, setInterval, clearInterval,
     document: {
       querySelector(selector) {
         if (!elements.has(selector)) elements.set(selector, createElement());
@@ -39,18 +39,9 @@ test('HTTPのVPN環境で重複しないUUIDを生成する', () => {
   for (const id of ids) assert.match(id, /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/);
 });
 
-test('木場駅のAPI生成結果をHTTP環境でも旅程として表示できる', async () => {
-  const { context, elements } = httpBrowser();
-  context.fetch = async () => ({ ok: true, json: async () => ({
-    category: '街歩き', days: [{ summary: '木場公園を散策', events: [{ time: '10:00', name: '木場公園', duration: '1時間' }] }],
-  }) });
-  vm.runInContext('readForm = () => ({departurePoint:"",destination:"木場駅",startDate:"2026-10-11",endDate:"2026-10-11",pace:"relaxed",interests:[]});', context);
-  await vm.runInContext('generate()', context);
-  assert.equal(context.displayed.destination, '木場駅');
-  assert.equal(context.displayed.days[0].events[0].name, '木場公園');
-  assert.ok(context.displayed.id);
-  assert.equal(context.notice, undefined);
-  assert.equal(elements.get('#planner-form .primary-button').disabled, false);
+test('HTTPのVPN環境でJSONからID付き旅程を表示できる',()=>{
+ const {context}=httpBrowser();context.importPlan={destination:'木場駅',startDate:'2026-11-01',endDate:'2026-11-01',pace:'relaxed',interests:[],travelMode:'TRANSIT',days:[{date:'2026-11-01',events:[{name:'木場公園',time:'10:00',duration:'約60分',place:'木場公園'}]}]};
+ assert.equal(vm.runInContext('restoreDraft(createImportedTrip(importPlan))',context),true);assert.equal(context.displayed.destination,'木場駅');assert.ok(context.displayed.id);assert.ok(context.displayed.days[0].events[0].id);
 });
 
 test('IDのない既存の下書きもHTTP環境で復元できる', () => {

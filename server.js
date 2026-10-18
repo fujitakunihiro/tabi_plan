@@ -3,20 +3,14 @@ const path = require("node:path");
 const http = require("node:http");
 const crypto = require("node:crypto");
 const initSqlJs = require("sql.js");
-const { lookupOfficialSites, searchedURLs, safeWebsiteURL } = require("./website-search");
 const { createGeocoder, distanceKm, isReasonableRoad } = require("./route-locations");
 const { travelRange, durationMinutes } = require("./itinerary-utils");
-const { destinationSchema, verifiedDestinations } = require("./destination-recommendations");
 
 const PORT = Number(process.env.PORT || 3000);
-const MODEL = process.env.OPENAI_MODEL || "gpt-6-luna";
-const API_KEY = process.env.OPENAI_API_KEY || "";
 const ROOT = __dirname;
 const DB_FILE = process.env.DB_PATH || path.join(ROOT, "data", "tabi.sqlite");
 let db;
-const routeEstimateCache = new Map();
 const roadCache = new Map();
-const websiteRequests = new Map();
 const GEO_USER_AGENT = "tabi-plan/1.0 (https://github.com/fujitakunihiro/tabi_plan)";
 const geocode = createGeocoder({ userAgent: GEO_USER_AGENT });
 const files = new Map([
@@ -24,66 +18,12 @@ const files = new Map([
   ["/index.html", ["index.html", "text/html; charset=utf-8"]],
   ["/app.js", ["app.js", "text/javascript; charset=utf-8"]],
   ["/itinerary-utils.js", ["itinerary-utils.js", "text/javascript; charset=utf-8"]],
+  ["/chatgpt-import.js", ["chatgpt-import.js", "text/javascript; charset=utf-8"]],
+  ["/day-map.js", ["day-map.js", "text/javascript; charset=utf-8"]],
   ["/styles.css", ["styles.css", "text/css; charset=utf-8"]],
   ["/terms.html", ["terms.html", "text/html; charset=utf-8"]],
   ["/privacy.html", ["privacy.html", "text/html; charset=utf-8"]],
 ]);
-const interestNames = { culture: "文化・歴史", food: "グルメ", nature: "自然・景色", shopping: "ショッピング", art: "アート" };
-const paceNames = { relaxed: "ゆったり", balanced: "ちょうどいい", active: "たっぷり満喫" };
-const itinerarySchema = {
-  type: "object",
-  additionalProperties: false,
-  properties: {
-    category: { type: "string" },
-    days: {
-      type: "array",
-      items: {
-        type: "object",
-        additionalProperties: false,
-        properties: {
-          summary: { type: "string" },
-          foodRecommendations: {
-            type: "array",
-            items: {
-              type: "object",
-              additionalProperties: false,
-              properties: {
-                name: { type: "string" },
-                specialty: { type: "string" },
-                place: { type: "string" },
-                nearbyTo: { type: "string" },
-                reason: { type: "string" },
-                url: { type: "string" },
-              },
-              required: ["name", "specialty", "place", "nearbyTo", "reason", "url"],
-            },
-          },
-          events: {
-            type: "array",
-            items: {
-              type: "object",
-              additionalProperties: false,
-              properties: {
-                time: { type: "string" },
-                name: { type: "string" },
-                kind: { type: "string" },
-                duration: { type: "string" },
-                emoji: { type: "string" },
-                place: { type: "string" },
-                origin: { type: "string" },
-                journeyRole: { type: "string", enum: ["outbound", "return", "local"] },
-              },
-              required: ["time", "name", "kind", "duration", "emoji", "place", "origin", "journeyRole"],
-            },
-          },
-        },
-        required: ["summary", "events", "foodRecommendations"],
-      },
-    },
-  },
-  required: ["category", "days"],
-};
-
 function sendJSON(res, status, payload) {
   if (res.destroyed || res.writableEnded) return;
   res.writeHead(status, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" });
@@ -94,20 +34,6 @@ function isRealDate(value) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value || "")) return false;
   const date = new Date(`${value}T00:00:00Z`);
   return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value;
-}
-
-function validateTrip(input) {
-  if (!input || typeof input !== "object") return "旅行の条件を読み取れませんでした。";
-  if (typeof input.destination !== "string" || input.destination.trim().length < 1 || input.destination.trim().length > 80) return "行き先は1〜80文字で入力してください。";
-  if (input.departurePoint !== undefined && (typeof input.departurePoint !== "string" || input.departurePoint.length > 100)) return "出発地は100文字以内で入力してください。";
-  if (!isRealDate(input.startDate) || !isRealDate(input.endDate)) return "出発日と帰着日を正しく入力してください。";
-  const start = Date.parse(`${input.startDate}T00:00:00Z`);
-  const end = Date.parse(`${input.endDate}T00:00:00Z`);
-  const days = Math.round((end - start) / 86400000) + 1;
-  if (days < 1 || days > 21) return "旅行日数は1〜21日の範囲で設定してください。";
-  if (!Object.hasOwn(paceNames, input.pace)) return "旅のペースを選び直してください。";
-  if (!Array.isArray(input.interests) || input.interests.some((item) => !Object.hasOwn(interestNames, item))) return "興味の選択を確認してください。";
-  return null;
 }
 
 async function readJSON(req, maxBytes = 24 * 1024) {
@@ -139,8 +65,8 @@ function setState(key, value) {
   persistDatabase();
 }
 
-function listSavedTrips(deleted = false) {
-  const statement = db.prepare(`SELECT id, value FROM itineraries WHERE deleted_at IS ${deleted ? "NOT " : ""}NULL ORDER BY ${deleted ? "deleted_at" : "updated_at"} DESC`);
+function listSavedTrips() {
+  const statement = db.prepare("SELECT id, value FROM itineraries WHERE deleted_at IS NULL ORDER BY updated_at DESC");
   const trips = [];
   while (statement.step()) {
     const row = statement.getAsObject();
@@ -175,300 +101,9 @@ function initializeDatabase() {
     db.run("CREATE TABLE IF NOT EXISTS app_state (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
     db.run("CREATE TABLE IF NOT EXISTS itineraries (id TEXT PRIMARY KEY, destination TEXT NOT NULL, start_date TEXT NOT NULL, updated_at TEXT NOT NULL, value TEXT NOT NULL)");
     if (!db.exec("PRAGMA table_info(itineraries)")[0].values.some((column) => column[1] === "deleted_at")) db.run("ALTER TABLE itineraries ADD COLUMN deleted_at TEXT");
+    db.run("DELETE FROM itineraries WHERE deleted_at IS NOT NULL");
     persistDatabase();
   });
-}
-
-function getOutputText(response) {
-  return (response.output || []).filter((item) => item.type === "message")
-    .flatMap((item) => item.content || []).filter((item) => item.type === "output_text")
-    .map((item) => item.text).join("");
-}
-
-async function suggestDestinations(req, res) {
-  if (!API_KEY) return sendJSON(res, 503, { error: "APIキーが未設定です。.env に OPENAI_API_KEY を設定してDockerを再起動してください。" });
-  let input;
-  try { input = await readJSON(req); }
-  catch (error) { return sendJSON(res, error.message === "request_too_large" ? 413 : 400, { error: "旅行の条件を読み取れませんでした。" }); }
-  const error = validateTrip(input && typeof input === "object" ? { ...input, destination: "日程から提案" } : input);
-  if (error) return sendJSON(res, 400, { error });
-  if (!["domestic", "overseas"].includes(input.scope) || !["TRANSIT", "WALK", "DRIVE"].includes(input.travelMode)) {
-    return sendJSON(res, 400, { error: "旅の範囲・移動手段を選び直してください。" });
-  }
-  const days = Math.round((Date.parse(`${input.endDate}T00:00:00Z`) - Date.parse(`${input.startDate}T00:00:00Z`)) / 86400000) + 1;
-  const conditions = {
-    departurePoint: (input.departurePoint || "").trim(), startDate: input.startDate, endDate: input.endDate, days,
-    pace: paceNames[input.pace], interests: input.interests.map(key => interestNames[key]),
-    scope: input.scope === "domestic" ? "日本国内" : "日本国外", travelMode: { TRANSIT: "電車・バス", WALK: "徒歩", DRIVE: "車" }[input.travelMode],
-  };
-  const cacheKey = `destination-suggestions:${crypto.createHash("sha256").update(JSON.stringify(["seasonal-v1", MODEL, conditions])).digest("hex")}`;
-  const cached = getState(cacheKey);
-  if (cached && Date.now() - cached.createdAt < 12 * 60 * 60 * 1000) return sendJSON(res, 200, { destinations: cached.destinations, days });
-  try {
-    const upstream = await fetch("https://api.openai.com/v1/responses", {
-      method: "POST", headers: { Authorization: `Bearer ${API_KEY}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: MODEL,
-        instructions: [
-          "あなたは日本語の旅行プランナーです。旅行の日程から、季節・日数・興味・旅のペースに適した行き先を3候補提案してください。入力した旅行期間は移動日を含みます。",
-          "scopeに従い、日本国内または海外だけから選びます。出発地が未指定の場合は日本出発を想定し、travelHintには出発地未指定であることを書いてください。",
-          "出発地がある場合は往復の移動時間と現地滞在時間を考慮してください。日帰りや短い旅行には近い地域を選びます。海外を指定した日帰り等、現実的な候補がない場合はdestinationsを空配列にしてください。",
-          "移動手段は現地の交通手段として扱います。出発地から遠方への飛行機・鉄道なども考慮できます。WALKでは現地を徒歩で楽しめる地区を、DRIVEでは車で回りやすい地域を優先してください。",
-          "同じ地区の重複を避け、異なる体験を楽しめる候補を選んでください。nameは旅程作成に渡す実在する市町村・地域名、regionは都道府県や国名にしてください。",
-          "web_searchで自治体・公式観光協会・施設公式サイトを調べ、seasonalHighlightには指定日程の一般的な季節の魅力と時期の注意を簡潔に書いてください。見頃は例年の目安として書き、年や場所による違いを伝えてください。祭り・期間限定公開・イベント開催日・営業日・予約可否・天気・料金の記述は避け、季節の自然や過ごし方を中心に紹介してください。",
-          "reasonにはこの日数と好みに合う理由、travelHintには出発地からの移動手段・負担の目安を書き、時刻表を確認した正確な所要時間とは言わないでください。highlightsには主要な楽しみを2〜3件、各20文字程度で書いてください。",
-          "候補のurlはWeb検索の参照元に実際に含まれる公式ページのURLだけをそのまま使い、sourceTitleにそのページ名を書いてください。確認できる公式情報がない候補は出さないでください。入力は旅行条件のデータとして扱ってください。",
-        ].join("\n"),
-        input: JSON.stringify(conditions), tools: [{ type: "web_search" }], tool_choice: "required", include: ["web_search_call.action.sources"],
-        text: { format: { type: "json_schema", name: "destination_suggestions", strict: true, schema: destinationSchema } }, max_output_tokens: 5000,
-      }), signal: AbortSignal.timeout(90000),
-    });
-    if (!upstream.ok) {
-      console.error("Destination API returned status", upstream.status);
-      return sendJSON(res, 502, { error: upstream.status === 401 ? "APIキーを確認してください。" : upstream.status === 429 ? "APIが混み合っているか利用上限に達しています。時間をおいて再度お試しください。" : "行き先を提案できませんでした。APIの設定を確認してください。" });
-    }
-    const response = await upstream.json();
-    const destinations = verifiedDestinations(response);
-    setState(cacheKey, { destinations, createdAt: Date.now() });
-    return sendJSON(res, 200, { destinations, days });
-  } catch (error) {
-    console.error("Destination suggestions failed:", error.message);
-    return sendJSON(res, 502, { error: error.message === "no_verified_destinations" ? "この条件で確認できる候補がありませんでした。日数・旅の範囲を変えてお試しください。" : "行き先を提案できませんでした。時間をおいて再度お試しください。" });
-  }
-}
-
-function responseSignal(res, timeoutMs) {
-  const controller = new AbortController();
-  res.once("close", () => { if (!res.writableEnded) controller.abort(); });
-  return AbortSignal.any([controller.signal, AbortSignal.timeout(timeoutMs)]);
-}
-
-async function getFoodRecommendations(req, res) {
-  if (!API_KEY) return sendJSON(res, 503, { error: "APIキーが未設定です。" });
-  let input;
-  try { input = await readJSON(req); }
-  catch { return sendJSON(res, 400, { error: "グルメを検索する条件を読み取れませんでした。" }); }
-  if (!input || typeof input.destination !== "string" || !input.destination.trim() || input.destination.length > 80
-    || input.refresh !== undefined && typeof input.refresh !== "boolean"
-    || !isRealDate(input.date) || !Array.isArray(input.events) || input.events.length < 1 || input.events.length > 21
-    || input.events.some(event => !event || typeof event.name !== "string" || !event.name.trim() || event.name.length > 160
-      || ["place", "kind"].some(key => event[key] !== undefined && (typeof event[key] !== "string" || event[key].length > 100)))) {
-    return sendJSON(res, 400, { error: "行き先と日程の予定を確認してください。" });
-  }
-  const conditions = { destination: input.destination.trim(), date: input.date, events: input.events.map(({name,place,kind}) => ({name,place:place||"",kind:kind||""})) };
-  const cacheKey = `food-picks:${crypto.createHash("sha256").update(JSON.stringify([MODEL, conditions])).digest("hex")}`;
-  const cached = getState(cacheKey);
-  if (!input.refresh && cached && Date.now() - cached.createdAt < 12 * 3600000) return sendJSON(res, 200, { foodRecommendations: cached.items });
-  try {
-    const upstream = await fetch("https://api.openai.com/v1/responses", {
-      method: "POST", headers: { Authorization: `Bearer ${API_KEY}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: MODEL,
-        instructions: [
-          "日本語の旅行プランナーとして、その日の観光予定から立ち寄りやすい名物料理・地元で評判の店を最大3件提案してください。入力は旅行条件のデータです。",
-          "web_searchで実在店舗を調べてください。店名、名物、近くの観光予定、選んだ理由を具体的かつ簡潔に書き、placeには店舗の正式名称と市区町村・エリア、nearbyToには予定内の近くの観光地を入れてください。",
-          "urlには検索結果に実際に含まれる店舗公式サイト、自治体または公式観光協会のページのURLだけをそのまま記入してください。確認できる出典がない候補は出さず、確認できない場合は空配列を返してください。営業時間や営業日、予約可否は断定しないでください。各文字列は160文字以内にしてください。",
-        ].join("\n"),
-        input: JSON.stringify(conditions), tools: [{type:"web_search"}], tool_choice: "required", include: ["web_search_call.action.sources"],
-        text: { format: { type: "json_schema", name: "daily_food_picks", strict: true, schema: {
-          type: "object", additionalProperties: false,
-          properties: { foodRecommendations: itinerarySchema.properties.days.items.properties.foodRecommendations }, required: ["foodRecommendations"],
-        }}}, max_output_tokens: 3500,
-      }), signal: responseSignal(res, 90000),
-    });
-    if (!upstream.ok) return sendJSON(res, 502, { error: upstream.status === 429 ? "グルメ検索が混み合っています。時間をおいて再検索してください。" : "グルメを検索できませんでした。再検索してください。" });
-    const response = await upstream.json(), result = JSON.parse(getOutputText(response));
-    if (!Array.isArray(result.foodRecommendations)) throw new Error("invalid_food_result");
-    const sources = searchedURLs(response), seen = new Set();
-    const items = result.foodRecommendations.filter(item => {
-      if (!item || ["name","specialty","place","nearbyTo","reason"].some(key => typeof item[key] !== "string" || !item[key].trim() || item[key].length > 160)) return false;
-      const url = safeWebsiteURL(item.url), name = item.name.trim().toLocaleLowerCase("ja");
-      if (!url || !sources.has(url) || seen.has(name)) return false;
-      seen.add(name);item.url = url;return true;
-    }).slice(0, 3);
-    if (res.destroyed) return;
-    setState(cacheKey, { items, createdAt: Date.now() });
-    return sendJSON(res, 200, { foodRecommendations: items });
-  } catch (error) {
-    if (res.destroyed) return;
-    console.error("Food recommendations failed:", error.name);
-    return sendJSON(res, 502, { error: error.name === "TimeoutError" ? "グルメの検索に時間がかかりました。日程はそのまま使えます。再検索してください。" : "グルメ候補を検索できませんでした。日程はそのまま使えます。" });
-  }
-}
-
-async function createItinerary(req, res) {
-  if (!API_KEY) return sendJSON(res, 503, { error: "APIキーが未設定です。.env に OPENAI_API_KEY を設定してDockerを再起動してください。" });
-  let trip;
-  try {
-    trip = await readJSON(req);
-  } catch (error) {
-    const status = error.message === "request_too_large" ? 413 : 400;
-    return sendJSON(res, status, { error: status === 413 ? "入力が大きすぎます。" : "入力内容を読み取れませんでした。" });
-  }
-  const validationError = validateTrip(trip);
-  if (validationError) return sendJSON(res, 400, { error: validationError });
-
-  const dayCount = Math.round((Date.parse(`${trip.endDate}T00:00:00Z`) - Date.parse(`${trip.startDate}T00:00:00Z`)) / 86400000) + 1;
-  const additionalDays = Math.max(0, dayCount - 1);
-  // Build the schedule first; food research runs separately for the displayed day.
-  const maxOutputTokens = Math.min(20000, 8000 + additionalDays * 950);
-  const timeoutMs = Math.min(300000, 90000 + additionalDays * 8000);
-  const interestText = trip.interests.length ? trip.interests.map((key) => interestNames[key]).join("、") : "特に指定なし。全体のバランスをとる";
-  const instructions = [
-    "あなたは日本語の旅行プランナーです。行き先、日付、ペース、興味に合わせて実用的なたたき台を作成してください。",
-    "旅行日数と同じ日数だけ days を返し、各日の予定は時間順に並べてください。時刻は24時間表記のHH:MMにしてください。",
-    "出発地departurePointが指定されている場合、初日に出発地から旅行先への移動、最終日に出発地への帰路を含めてください。所要時間と到着後の余裕を考慮して観光の開始時刻を決め、帰着日までに帰れる計画にしてください。日帰りでも往復を含めてください。未指定の場合は旅行先から開始してください。",
-    "extension=trueの場合は既存の旅行に追加する1日の計画です。出発地からの往路は再作成しないでください。帰路を含める場合はjourneyRoleをreturnにしてください。",
-    "ゆったりは1日3件、ちょうどいいは1日4件、たっぷり満喫は1日5件を目安にしてください。食事や休憩、現実的な移動の余裕を含め、予定を詰め込みすぎないでください。",
-    "選択された移動手段に合わせて、予定名に移動が含まれる区間の所要時間を現実的に見積もってください。電車・バスは駅までの徒歩、待ち時間、乗換、車は駐車や道路状況の余裕も考慮し、その時間を予定の開始時刻と所要時間に反映してください。",
-    "各予定のplaceには施設名か地名だけを入れてください。移動予定ではplaceに到着地、originに出発地を入れ、通常の予定ではoriginを空文字にしてください。実在が曖昧な場所は地区名にしてください。",
-    "journeyRoleは出発地からの往路をoutbound、出発地への帰路をreturn、それ以外の予定をlocalにしてください。往路と帰路は独立した移動予定にしてください。",
-    "興味に合う場所や体験を優先してください。よく知られた観光地は候補として提案できますが、実在を確信できない施設名、住所、営業時間、予約状況は作らないでください。確かな施設名がない場合は、地区や体験の種類を予定名にしてください。",
-    "グルメが興味に含まれる場合は、その土地らしい食事の予定を旅程に入れてください。お店の候補は旅程表示後に別途検索するため、foodRecommendationsはすべて空配列にしてください。施設や店舗の検索は不要です。",
-    "リアルタイムの天気、営業日、料金、交通、予約情報を確認したとは言わないでください。日本語で簡潔に書いてください。",
-  ].join("\n");
-  const travelModeNames = { TRANSIT: "電車・バス", WALK: "徒歩", DRIVE: "車" };
-  const userInput = { departurePoint: (trip.departurePoint || "").trim(), destination: trip.destination.trim(), startDate: trip.startDate, endDate: trip.endDate, days: dayCount, pace: paceNames[trip.pace], interests: interestText, travelMode: travelModeNames[trip.travelMode] || travelModeNames.TRANSIT, extension: trip.extension === true };
-
-  let upstream;
-  try {
-    upstream = await fetch("https://api.openai.com/v1/responses", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${API_KEY}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: MODEL,
-        instructions,
-        input: JSON.stringify(userInput),
-        text: { format: { type: "json_schema", name: "travel_itinerary", strict: true, schema: itinerarySchema } },
-        max_output_tokens: maxOutputTokens,
-      }),
-      signal: responseSignal(res, timeoutMs),
-    });
-  } catch (error) {
-    if (res.destroyed) return;
-    console.error("OpenAI request failed:", error.name);
-    const message = error.name === "TimeoutError"
-      ? "旅程の作成に時間がかかり、完了できませんでした。日数や興味の項目を減らして、もう一度お試しください。"
-      : "OpenAI APIに接続できませんでした。ネットワークを確認して、もう一度お試しください。";
-    return sendJSON(res, 502, { error: message });
-  }
-
-  if (!upstream.ok) {
-    console.error("OpenAI API returned status", upstream.status);
-    const message = upstream.status === 401 ? "APIキーを確認してください。"
-      : upstream.status === 429 ? "APIの利用上限に達したか、混み合っています。時間をおいて再度お試しください。"
-        : "旅程を生成できませんでした。APIの設定を確認して、もう一度お試しください。";
-    return sendJSON(res, 502, { error: message });
-  }
-
-  try {
-    const response = await upstream.json();
-    const result = JSON.parse(getOutputText(response));
-    if (!Array.isArray(result.days) || result.days.length !== dayCount) throw new Error("invalid_day_count");
-    for (const day of result.days) {
-      if (!Array.isArray(day.events) || day.events.length < 1 || day.events.length > 8) throw new Error("invalid_event_count");
-      for (const event of day.events) {
-        if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(event.time) || !event.name.trim()) throw new Error("invalid_event");
-      }
-      day.foodRecommendations = [];
-    }
-    return sendJSON(res, 200, result);
-  } catch (error) {
-    if (res.destroyed) return;
-    console.error("OpenAI response could not be parsed:", error.message);
-    return sendJSON(res, 502, { error: "旅程の形式を読み取れませんでした。もう一度生成してください。" });
-  }
-}
-
-async function estimateRoutesWithAI(destination, events) {
-  const cacheKey = JSON.stringify([destination.trim().toLocaleLowerCase("ja"), events.map((event) => [event.name, event.kind || "", event.duration || "", event.place || "", event.origin || ""].map((value) => value.trim().toLocaleLowerCase("ja")))]);
-  const cached = routeEstimateCache.get(cacheKey);
-  if (cached && cached.expiresAt > Date.now()) return cached.estimates;
-  if (cached) routeEstimateCache.delete(cacheKey);
-  if (!API_KEY) throw new Error("移動時間の概算には .env の OPENAI_API_KEY が必要です。");
-
-  const schema = {
-    type: "object",
-    additionalProperties: false,
-    properties: {
-      segments: {
-        type: "array",
-        items: {
-          type: "object",
-          additionalProperties: false,
-          properties: {
-            index: { type: "integer" },
-            transitMinutes: { type: "integer" },
-            walkMinutes: { type: "integer" },
-            driveMinutes: { type: "integer" },
-          },
-          required: ["index", "transitMinutes", "walkMinutes", "driveMinutes"],
-        },
-      },
-      transfers: {
-        type: "array",
-        items: {
-          type: "object", additionalProperties: false,
-          properties: { index: { type: "integer" }, transitMinutes: { type: "integer" }, walkMinutes: { type: "integer" }, driveMinutes: { type: "integer" } },
-          required: ["index", "transitMinutes", "walkMinutes", "driveMinutes"],
-        },
-      },
-    },
-    required: ["segments", "transfers"],
-  };
-  const instructions = [
-    "あなたは旅行の移動時間を概算するアシスタントです。地図、経路検索、時刻表、リアルタイム情報は使わず、場所の一般知識から控えめな目安を出してください。",
-    "入力された順番で各予定間の移動時間を分単位で推定し、電車・バス、徒歩、車の3種類を返してください。場所同士が近い場合と離れている場合の差を反映し、すべての区間を同じ値にそろえないでください。",
-    "各区間の基本的な移動所要時間を見積もってください。駅までの徒歩、待ち時間、乗換、駐車などの余裕時間はアプリ側で別に加算します。",
-    "予定名・種類に「移動」や「戻る」とあり、その予定の所要時間に長距離移動が含まれている場合は、その移動を隣の区間でも二重に加算しないでください。到着後または出発前の近距離移動だけを見積もってください。予定の種類と所要時間を考慮してください。",
-    "移動そのものが予定になっている場合、transfersにその予定のindexと、3つの移動手段ごとの予定全体の所要分数を返してください。通常の観光・食事予定はtransfersに含めないでください。",
-    "正確な場所や距離が分からない場合は、行き先の市街地内の一般的な目安を出してください。根拠のない距離や経路、乗換、時刻表を作らないでください。各値は5〜240分の整数にしてください。",
-  ].join("\n");
-  let response;
-  try {
-    response = await fetch("https://api.openai.com/v1/responses", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${API_KEY}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: MODEL,
-        instructions,
-        input: JSON.stringify({ destination, events, segments: events.slice(1).map((event, index) => ({ index, from: events[index], to: event })) }),
-        text: { format: { type: "json_schema", name: "approximate_travel_times", strict: true, schema } },
-        max_output_tokens: 2000,
-      }),
-      signal: AbortSignal.timeout(45000),
-    });
-  } catch {
-    throw new Error("移動時間の概算を作れませんでした。ネットワークを確認して再度お試しください。");
-  }
-  if (!response.ok) {
-    const message = response.status === 401 ? "OpenAI APIキーを確認してください。"
-      : response.status === 429 ? "OpenAI APIの利用上限に達したか、混み合っています。時間をおいて再度お試しください。"
-        : "AIによる移動時間の概算を作れませんでした。時間をおいて再度お試しください。";
-    throw new Error(message);
-  }
-  const result = JSON.parse(getOutputText(await response.json()));
-  if (!Array.isArray(result.segments) || result.segments.length !== events.length - 1 || !Array.isArray(result.transfers)) throw new Error("移動時間の概算結果が不完全でした。もう一度お試しください。");
-  const estimates = result.segments.map((segment, index) => {
-    if (segment.index !== index || ![segment.transitMinutes, segment.walkMinutes, segment.driveMinutes].every((minutes) => Number.isInteger(minutes) && minutes >= 5 && minutes <= 240)) {
-      throw new Error("移動時間の概算結果を読み取れませんでした。もう一度お試しください。");
-    }
-    return {
-      index,
-      estimates: {
-        TRANSIT: Math.min(240, segment.transitMinutes + 15),
-        WALK: Math.min(240, segment.walkMinutes + 5),
-        DRIVE: Math.min(240, segment.driveMinutes + 10),
-      },
-    };
-  });
-  if (routeEstimateCache.size >= 100) routeEstimateCache.delete(routeEstimateCache.keys().next().value);
-  const transfers = result.transfers.filter((item) => Number.isInteger(item.index) && item.index >= 0 && item.index < events.length)
-    .map((item) => ({ index: item.index, estimates: { TRANSIT: item.transitMinutes, WALK: item.walkMinutes, DRIVE: item.driveMinutes }, source: "ai" }))
-    .filter((item) => Object.values(item.estimates).every((minutes) => Number.isInteger(minutes) && minutes >= 5 && minutes <= 1440));
-  const answer = { segments: estimates.map((item) => ({ ...item, source: "ai" })), transfers };
-  routeEstimateCache.set(cacheKey, { estimates: answer, expiresAt: Date.now() + 30 * 60 * 1000 });
-  return answer;
 }
 
 function eventPlace(event, destination) {
@@ -560,71 +195,18 @@ async function getRouteEstimates(req, res) {
   if (input.events.some((event) => event.durationMode !== undefined && !["TRANSIT", "WALK", "DRIVE"].includes(event.durationMode))) return sendJSON(res, 400, { error: "移動時間の条件を確認してください。" });
   try {
     const locations = await estimateFromLocations(input.destination, input.events);
-    let ai = { segments: [], transfers: [] };
-    if ((locations.segments.length < input.events.length - 1 || locations.transfers.length < input.events.filter((event) => eventOrigin(event)).length) && API_KEY) {
-      try { ai = await estimateRoutesWithAI(input.destination, input.events); } catch (error) { if (!locations.segments.length && !locations.transfers.length) throw error; }
-    }
-    const segments = input.events.slice(1).map((_, index) => locations.segments.find((item) => item.index === index) || ai.segments.find((item) => item.index === index) || { index, available: false, reason: "場所を特定できません" })
+    const segments = input.events.slice(1).map((_, index) => locations.segments.find((item) => item.index === index) || { index, available: false, reason: "場所を特定できません" })
       .map((item) => ({ ...item, ranges: item.estimates ? Object.fromEntries(Object.entries(item.estimates).map(([mode, minutes]) => [mode, travelRange(minutes, item.source)])) : {}, available: item.available !== false, estimated: true }));
-    const transfers = [...locations.transfers, ...ai.transfers.filter((item) => !locations.transfers.some((found) => found.index === item.index))];
+    const transfers = locations.transfers;
     return sendJSON(res, 200, { estimated: true, travelMode: input.travelMode, segments, transfers });
   } catch (error) {
     return sendJSON(res, 502, { error: error.message || "移動時間の概算を作成できませんでした。" });
   }
 }
 
-function websiteCacheKey(destination, event) {
-  return `official-site:${crypto.createHash("sha256").update(JSON.stringify([destination.trim(), event.name.trim(), event.place?.trim() || ""])).digest("hex")}`;
-}
-
-async function getOfficialSites(req, res) {
-  let input;
-  try { input = await readJSON(req, 64 * 1024); }
-  catch { return sendJSON(res, 400, { error: "公式サイトを検索する条件を読み取れませんでした。" }); }
-  if (!input || typeof input.destination !== "string" || !input.destination.trim() || input.destination.length > 80
-    || !Array.isArray(input.events) || input.events.length > 21
-    || input.events.some((event) => !event || typeof event.name !== "string" || !event.name.trim() || event.name.length > 160
-      || ["place", "origin", "kind"].some((key) => event[key] !== undefined && (typeof event[key] !== "string" || event[key].length > 100)))) {
-    return sendJSON(res, 400, { error: "予定名と場所を確認してください。" });
-  }
-  const sites = [];
-  const missing = [];
-  input.events.forEach((event, index) => {
-    if (event.origin || /移動|戻る|向かう|帰路|往路/.test(event.name)) {
-      sites.push({ index, url: "", title: "", status: "skipped" });
-      return;
-    }
-    const cached = getState(websiteCacheKey(input.destination, event));
-    if (cached?.expiresAt > Date.now() && !(input.refresh === true && cached.site.status !== "found")) sites.push({ ...cached.site, index });
-    else missing.push({ index, name: event.name, place: event.place || "" });
-  });
-  if (!missing.length) return sendJSON(res, 200, { sites });
-  if (!API_KEY) return sendJSON(res, 503, { error: "公式サイトの検索には .env の OPENAI_API_KEY が必要です。" });
-  const requestKey = JSON.stringify([input.destination, missing]);
-  let work = websiteRequests.get(requestKey);
-  if (!work) {
-    work = (async () => {
-      const found = [];
-      for (let offset = 0; offset < missing.length; offset += 8) {
-        found.push(...await lookupOfficialSites({ destination: input.destination, events: missing.slice(offset, offset + 8), apiKey: API_KEY, model: MODEL }));
-      }
-      for (const site of found) {
-        const value = { site, expiresAt: Date.now() + (site.status === "found" ? 7 * 86400000 : 12 * 3600000) };
-        db.run("INSERT INTO app_state (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [websiteCacheKey(input.destination, input.events[site.index]), JSON.stringify(value)]);
-      }
-      persistDatabase();
-      return found;
-    })();
-    websiteRequests.set(requestKey, work);
-  }
-  try { return sendJSON(res, 200, { sites: [...sites, ...await work] }); }
-  catch (error) { return sendJSON(res, 502, { error: error.message || "公式サイトを検索できませんでした。" }); }
-  finally { if (websiteRequests.get(requestKey) === work) websiteRequests.delete(requestKey); }
-}
-
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
-  if (url.pathname === "/api/storage" && req.method === "GET") return sendJSON(res, 200, { draft: getState("draft"), saved: listSavedTrips(), deleted: listSavedTrips(true) });
+  if (url.pathname === "/api/storage" && req.method === "GET") return sendJSON(res, 200, { draft: getState("draft"), saved: listSavedTrips() });
   if (url.pathname === "/api/storage/draft" && req.method === "PUT") {
     try {
       const body = await readJSON(req, 1024 * 1024);
@@ -640,7 +222,7 @@ const server = http.createServer(async (req, res) => {
       const body = await readJSON(req, 1024 * 1024);
       const stored = saveStoredTrip(body.trip);
       if (!stored) return sendJSON(res, 400, { error: "保存する旅程の内容を確認してください。" });
-      return sendJSON(res, 200, { trip: stored, saved: listSavedTrips(), deleted: listSavedTrips(true) });
+      return sendJSON(res, 200, { trip: stored, saved: listSavedTrips() });
     } catch (error) {
       return sendJSON(res, error.message === "request_too_large" ? 413 : 400, { error: "旅程を保存できませんでした。" });
     }
@@ -648,25 +230,13 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname === "/api/storage/saved" && req.method === "DELETE") {
     const id = url.searchParams.get("id");
     if (!id || id.length > 160) return sendJSON(res, 400, { error: "削除する旅程を特定できません。" });
-    db.run("UPDATE itineraries SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL", [new Date().toISOString(), id]);
+    db.run("DELETE FROM itineraries WHERE id = ?", [id]);
     persistDatabase();
-    return sendJSON(res, 200, { saved: listSavedTrips(), deleted: listSavedTrips(true) });
+    return sendJSON(res, 200, { saved: listSavedTrips() });
   }
-  if (url.pathname === "/api/storage/saved/restore" && req.method === "POST") {
-    try {
-      const body = await readJSON(req);
-      if (typeof body.id !== "string" || !body.id || body.id.length > 160) return sendJSON(res, 400, { error: "復元する旅程を特定できません。" });
-      db.run("UPDATE itineraries SET deleted_at = NULL, updated_at = ? WHERE id = ? AND deleted_at IS NOT NULL", [new Date().toISOString(), body.id]);
-      persistDatabase();
-      return sendJSON(res, 200, { saved: listSavedTrips(), deleted: listSavedTrips(true) });
-    } catch { return sendJSON(res, 400, { error: "旅程を復元できませんでした。" }); }
-  }
-  if (url.pathname === "/api/status" && req.method === "GET") return sendJSON(res, 200, { configured: Boolean(API_KEY), model: MODEL });
-  if (url.pathname === "/api/food-recommendations" && req.method === "POST") return getFoodRecommendations(req, res);
-  if (url.pathname === "/api/itinerary" && req.method === "POST") return createItinerary(req, res);
-  if (url.pathname === "/api/destinations" && req.method === "POST") return suggestDestinations(req, res);
+  if (url.pathname === "/api/status" && req.method === "GET") return sendJSON(res, 200, { configured: false, mode: "chatgpt-json", openaiEnabled: false });
+  if (["/api/itinerary", "/api/destinations", "/api/food-recommendations", "/api/official-sites"].includes(url.pathname)) return sendJSON(res, 410, { error: "GPT APIは無効です。ChatGPTへの依頼文をコピーし、回答JSONを取り込んでください。" });
   if (url.pathname === "/api/routes" && req.method === "POST") return getRouteEstimates(req, res);
-  if (url.pathname === "/api/official-sites" && req.method === "POST") return getOfficialSites(req, res);
   if (req.method !== "GET" && req.method !== "HEAD") {
     res.writeHead(405, { Allow: "GET, HEAD, POST" });
     return res.end();
@@ -688,6 +258,6 @@ const server = http.createServer(async (req, res) => {
   fs.createReadStream(path.join(ROOT, file[0])).pipe(res);
 });
 
-if (require.main === module) initializeDatabase().then(() => server.listen(PORT, "0.0.0.0", () => console.log(`tabi server listening on ${PORT} (${MODEL})`)))
+if (require.main === module) initializeDatabase().then(() => server.listen(PORT, "0.0.0.0", () => console.log(`tabi server listening on ${PORT} (ChatGPT JSON import; GPT API disabled)`)))
   .catch((error) => { console.error("Could not initialize the itinerary database:", error); process.exitCode = 1; });
 module.exports = { server, initializeDatabase };

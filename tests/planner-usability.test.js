@@ -1,7 +1,7 @@
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
 const S=require('../itinerary-utils');
 function browser(){
- const elements=new Map(),fields=[{disabled:false},{disabled:false}],context=vm.createContext({console,AbortController,URL,structuredClone,TabiSchedule:S,setTimeout,clearTimeout,setInterval,clearInterval,document:{
+ const elements=new Map(),fields=[{disabled:false},{disabled:false}],context=vm.createContext({console,AbortController,URL,structuredClone,TabiSchedule:S,TabiImport:require("../chatgpt-import"),setTimeout,clearTimeout,setInterval,clearInterval,document:{
   querySelector(selector){if(!elements.has(selector))elements.set(selector,{value:'',innerHTML:'',textContent:'',hidden:false,disabled:false,dataset:{},classList:{add(){},remove(){},toggle(){}},addEventListener(type,handler){this[type]=handler},querySelectorAll(){return []},replaceChildren(){},setAttribute(){},scrollIntoView(){},focus(){}});return elements.get(selector)},
   querySelectorAll(selector){return selector.includes('#planner-form input')?fields:[]},
  }});
@@ -9,38 +9,34 @@ function browser(){
  vm.runInContext('toast=message=>globalThis.notice=message; render=()=>globalThis.displayed=serializeTrip(); readForm=()=>({destination:"秋田",departurePoint:"",startDate:"2026-11-01",endDate:"2026-11-01",pace:"balanced",interests:["food"]});',context);
  return {context,elements,fields,run:code=>vm.runInContext(code,context)};
 }
-const plan={id:'trip',destination:'秋田',interests:['food'],days:[{date:'2026-11-01T03:00:00Z',events:[{id:'a',name:'美術館',time:'10:00',duration:'1時間',place:'秋田県立美術館',kind:'アート'},{id:'b',name:'昼食',time:'12:00',duration:'1時間',kind:'食事',place:'秋田駅'}]}]};
+const plan={id:'trip',destination:'秋田',startDate:'2026-11-01',endDate:'2026-11-01',pace:'balanced',interests:['food'],days:[{date:'2026-11-01T03:00:00Z',events:[{id:'a',name:'美術館',time:'10:00',duration:'1時間',place:'秋田県立美術館',kind:'アート'},{id:'b',name:'昼食',time:'12:00',duration:'1時間',kind:'食事',place:'秋田駅'}]}]};
 function loadPlan(run){run(`trip=${JSON.stringify(plan)};trip.days[0].date=new Date(trip.days[0].date);`)}
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
 
-test('生成を中止してから遅れて届いた応答で、元の旅程を上書きしない',async()=>{
- const {context,elements,fields,run}=browser();loadPlan(run);let finish,signal;
- context.fetch=async(url,options)=>{signal=options.signal;return new Promise(resolve=>finish=resolve)};
- const generating=run('generate()');assert.ok(fields.every(field=>field.disabled));assert.equal(elements.get('#generation-panel').dataset.state,'busy');
- elements.get('#cancel-generation').click();assert.equal(signal.aborted,true);
- finish({ok:true,json:async()=>({days:[{events:[]}]})});await generating;
- assert.equal(run('trip.id'),'trip');assert.equal(context.displayed,undefined);
- assert.equal(elements.get('#generation-panel').dataset.state,'cancelled');assert.ok(fields.every(field=>!field.disabled));
- assert.equal(elements.get('#planner-form .primary-button').disabled,false);
+const jsonPlan={version:1,destination:'京都',startDate:'2026-11-01',endDate:'2026-11-01',pace:'balanced',interests:[],days:[{date:'2026-11-01',events:[{time:'10:00',name:'清水寺',place:'清水寺 京都市',durationMinutes:90}]}]};
+test('依頼文の作成ではAPIに接続せず、表示中の旅程を変えない',()=>{
+ const {context,elements,run}=browser();loadPlan(run);context.fetch=()=>{throw Error('API must not run')};
+ run('generate()');assert.equal(run('trip.id'),'trip');assert.match(elements.get('#chatgpt-prompt').value,/秋田/);assert.equal(elements.get('#chatgpt-prompt-panel').hidden,false);
 });
-
-test('生成エラーは消えずに表示され、入力を保ったまま再試行できる',async()=>{
- const {context,elements,run}=browser();context.fetch=async()=>({ok:false,json:async()=>({error:'APIが混み合っています'})});
- await run('generate()');assert.equal(elements.get('#generation-panel').hidden,false);assert.equal(elements.get('#generation-panel').dataset.state,'error');
- assert.match(elements.get('#generation-status').textContent,/混み合っています/);assert.equal(elements.get('#planner-form .primary-button').disabled,false);
+test('プレビューはHTMLを実行せず、JSON書き換え後は再確認を必要にする',async()=>{
+ const {context,elements,run}=browser();loadPlan(run);const p=structuredClone(jsonPlan);p.days[0].events[0].name='<img src=x onerror=alert(1)>';
+ context.document.querySelector('#chatgpt-json').value=JSON.stringify(p);run('previewChatGPTJSON()');
+ assert.equal(run('trip.id'),'trip');assert.equal(elements.get('#chatgpt-import-preview').hidden,false);assert.match(elements.get('#chatgpt-preview-content').innerHTML,/&lt;img/);assert.doesNotMatch(elements.get('#chatgpt-preview-content').innerHTML,/<img/);
+ elements.get('#chatgpt-json').value='invalid';await run('applyChatGPTJSON()');assert.equal(run('trip.id'),'trip');assert.equal(elements.get('#chatgpt-import-preview').hidden,true);assert.match(elements.get('#chatgpt-import-error').textContent,/JSON/);
 });
-
-test('旅程を表示済みのままグルメを検索でき、失敗後に再検索できる',async()=>{
- const {context,elements,run}=browser();loadPlan(run);run('persistDraft=()=>{}');let finish,calls=0;
- context.fetch=async()=>{calls++;return new Promise(resolve=>finish=resolve)};
- const searching=run('updateFoodRecommendations()');assert.match(elements.get('#food-recommendations').innerHTML,/検索中/);assert.equal(run('trip.days[0].events.length'),2);
- finish({ok:false,json:async()=>({error:'検索に時間がかかりました'})});await searching;
- assert.match(elements.get('#food-recommendations').innerHTML,/再検索/);assert.equal(run('trip.days[0].events.length'),2);
- await run('updateFoodRecommendations()');assert.equal(calls,1);
- const retry=run('updateFoodRecommendations(true)');finish({ok:true,json:async()=>({foodRecommendations:[{name:'お店',specialty:'名物',place:'秋田',nearbyTo:'美術館',reason:'近くで楽しめる',url:'https://example.org/store'}]})});await retry;
- assert.equal(run('trip.days[0].foodRecommendations[0].name'),'お店');assert.equal(calls,2);
+test('取り込みは元の旅程を保存し、新IDの下書き保存後に表示する。古い下書きを後書きしない',async()=>{
+ const {context,elements,run}=browser();loadPlan(run);const writes=[];
+ context.fetch=async(url,options)=>{writes.push({url,body:JSON.parse(options.body)});return {ok:true,json:async()=>({saved:[plan],deleted:[]})}};
+ context.document.querySelector('#chatgpt-json').value=JSON.stringify(jsonPlan);run('previewChatGPTJSON()');await run('applyChatGPTJSON()');run('clearTimeout(draftTimer)');await tick();
+ const id=run('trip.id');assert.notEqual(id,'trip');assert.equal(context.displayed.destination,'京都');assert.equal(writes.find(item=>item.url.endsWith('/saved')).body.trip.id,'trip');assert.equal(writes.at(-1).body.draft.id,id);
+ assert.equal(elements.get('#chatgpt-json').value,'');assert.equal(elements.get('.app-shell').inert,false);
 });
-
+test('元の旅程の保存に失敗したらJSON反映を止め、現在の旅程を保つ',async()=>{
+ const {context,elements,run}=browser();loadPlan(run);const writes=[];
+ context.fetch=async(url,options)=>{writes.push({url,body:JSON.parse(options.body)});return {ok:!url.endsWith('/saved')}};
+ context.document.querySelector('#chatgpt-json').value=JSON.stringify(jsonPlan);run('previewChatGPTJSON()');await run('applyChatGPTJSON()');run('clearTimeout(draftTimer)');
+ assert.equal(run('trip.id'),'trip');assert.match(elements.get('#chatgpt-import-error').textContent,/現在の旅程を保存できません/);assert.equal(writes.some(item=>item.body.draft?.destination==='京都'),false);assert.equal(elements.get('#apply-chatgpt-json').disabled,false);
+});
 test('上へ下へで予定を並べ替え、編集中や端では並べ替えない',()=>{
  const {run}=browser();loadPlan(run);run('renderDay=()=>TabiSchedule.scheduleDay(trip.days[0],[{index:0,estimates:{TRANSIT:15}}],"TRANSIT")');
  run('moveEvent("b",-1)');assert.equal(run('trip.days[0].events[0].id'),'b');assert.equal(run('trip.days[0].events[1].time'),'13:15');
@@ -48,12 +44,32 @@ test('上へ下へで予定を並べ替え、編集中や端では並べ替え�
  run('trip.days[0].events[0].editing=true;moveEvent("b",1)');assert.equal(run('trip.days[0].events[0].id'),'b');
 });
 
-test('別の旅程に切り替えた後のグルメ応答で、現在の候補を上書きしない',async()=>{
- const {context,run}=browser();loadPlan(run);run('persistDraft=()=>{}');let finish;
+test('経路を再計算中でも別の日へ移動でき、カードと固定時刻を保持する',()=>{
+ const {run}=browser();loadPlan(run);
+ run('trip.days.push({date:new Date("2026-11-02T03:00:00Z"),events:[{id:"c",name:"夕食",time:"18:00",duration:"1時間"}]});trip.days[0].events[0].timeLocked=true;routesUpdatingAll=true;routesUpdatingTrip=trip');
+ assert.equal(run('moveEventToDay("a",0,1)'),true);
+ assert.equal(run('activeDay'),1);assert.equal(run('trip.days[0].events.length'),1);
+ assert.equal(run('trip.days[1].events[0].id'),'a');assert.equal(run('trip.days[1].events[0].timeLocked'),true);
+ assert.equal(run('trip.days.flatMap(day=>day.events).filter(event=>event.id==="a").length'),1);
+ assert.equal(run('trip.routeModePending'),true);
+});
+
+test('移動前の経路の応答が遅れて届いても、移動後のカードを更新しない',async()=>{
+ const {context,run}=browser();loadPlan(run);let finish;
+ run('trip.days.push({date:new Date("2026-11-02T03:00:00Z"),events:[]});renderDay=()=>{};persistDraft=()=>{};drawRouteInfo=()=>{}');
  context.fetch=async()=>new Promise(resolve=>finish=resolve);
- const searching=run('updateFoodRecommendations()');run('trip={...trip,id:"new",destination:"京都",days:[{date:new Date("2026-11-01T03:00:00Z"),events:[],foodRecommendations:[]}]}');
- finish({ok:true,json:async()=>({foodRecommendations:[{name:'秋田のお店'}]})});await searching;
- assert.equal(run('trip.destination'),'京都');assert.equal(run('trip.days[0].foodRecommendations.length'),0);
+ const calculating=run('updateRouteEstimates(true)');assert.equal(run('routesUpdatingAll'),true);
+ assert.equal(run('moveEventToDay("a",0,1)'),true);
+ finish({ok:true,json:async()=>({segments:[],transfers:[{index:0,estimates:{TRANSIT:999}}]})});await calculating;
+ assert.equal(run('trip.days[1].events[0].duration'),'1時間');assert.equal(run('trip.days[0].routeData'),undefined);
+});
+
+test('別の日の編集中や存在しない移動先は、予定を削除せず説明する',()=>{
+ const {context,run}=browser();loadPlan(run);
+ run('trip.days.push({date:new Date("2026-11-02T03:00:00Z"),events:[{id:"c",name:"編集中",editing:true}]})');
+ assert.equal(run('moveEventToDay("a",0,1)'),false);assert.match(context.notice,/DAY 02.*保存または取消/);
+ run('trip.days[1].events[0].editing=false');assert.equal(run('moveEventToDay("a",0,99)'),false);
+ assert.equal(run('trip.days[0].events[0].id'),'a');
 });
 
 test('古い保存の応答だけでは最新の変更を保存済みにせず、最新の応答を待つ',async()=>{
