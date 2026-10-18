@@ -37,7 +37,7 @@ $("#retry-draft-save").addEventListener("click",()=>flushDraft());
 function restoreDraft(draft,{flushCurrent=true}={}){if(!draft?.days?.length)return false;try{if(trip&&flushCurrent)flushDraft();const legacy=savedTrips.find(item=>item.destination===draft.destination&&item.startDate===draft.startDate);trip={...draft,initialTravelMode:draft.initialTravelMode||draft.travelMode||"TRANSIT",id:draft.id||legacy?.id||TabiSchedule.createId(),travelMode:draft.travelMode||travelMode,days:draft.days.map(day=>({...day,date:new Date(day.date)}))};travelMode=trip.travelMode;activeDay=Math.min(draft.activeDay||0,trip.days.length-1);$("#destination").value=trip.destination;$("#start-date").value=trip.startDate;$("#end-date").value=trip.endDate;$("#end-date").min=trip.startDate;$("#pace").value=trip.pace;document.querySelectorAll(".chip input").forEach(input=>{input.checked=trip.interests.includes(input.value);input.closest(".chip").classList.toggle("selected",input.checked)});render();return true}catch(error){console.error("Could not restore the itinerary:",error);return false}}
 async function initializeStorage(){try{const response=await fetch("/api/storage",{cache:"no-store"});if(!response.ok)throw new Error();const stored=await response.json();savedTrips=stored.saved||[];let draft=stored.draft;try{const oldDraft=JSON.parse(localStorage.getItem(DRAFT_KEY)||"null"),oldSaved=JSON.parse(localStorage.getItem(SAVED_KEY)||"[]");if(!draft&&oldDraft?.days?.length){draft=oldDraft;const migrated=await fetch("/api/storage/draft",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({draft})});if(!migrated.ok)throw new Error()}for(const oldTrip of oldSaved){const migrated=await fetch("/api/storage/saved",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({trip:oldTrip})});if(!migrated.ok)throw new Error();savedTrips=(await migrated.json()).saved}localStorage.removeItem(DRAFT_KEY);localStorage.removeItem(SAVED_KEY)}catch(error){console.warn("Previous browser-saved trips could not be migrated:",error.message)}updateSaved();if(draft?.days?.length){if(!restoreDraft(draft))renderStorageError("保存した旅程を表示できませんでした。")}else renderEmpty()}catch{renderStorageError("保存データベースに接続できません。VPN接続を確認してください。")}}
 function renderStorageError(message){renderEmpty();const note=document.createElement("p"),retry=document.createElement("button");note.className="empty-day";note.textContent=message;retry.type="button";retry.className="add-event-button";retry.textContent="旅程を再読み込み";retry.addEventListener("click",async()=>{retry.disabled=true;await initializeStorage()});$("#day-content").replaceChildren(note,retry);toast(message)}
-function renderEmpty(){trip=null;renderDraftStatus();$("#result-destination").textContent="旅程";$("#result-suffix").textContent="";$("#trip-summary").textContent="条件から依頼文を作り、ChatGPTの回答を取り込んでください。";$("#overview-dates").textContent="—";$("#overview-days").textContent="—";$("#overview-pace").textContent="—";$("#day-move-hint").hidden=true;$("#day-tabs").innerHTML="";$("#day-content").innerHTML='<p class="empty-day">旅程を作成すると、日ごとの予定がここに表示されます。</p>';$("#save-button").disabled=true;}
+function renderEmpty(){trip=null;renderDraftStatus();$("#result-destination").textContent="旅程";$("#result-suffix").textContent="";$("#trip-summary").textContent="条件から依頼文を作り、Geminiの回答を取り込んでください。";$("#overview-dates").textContent="—";$("#overview-days").textContent="—";$("#overview-pace").textContent="—";$("#day-move-hint").hidden=true;$("#day-tabs").innerHTML="";$("#day-content").innerHTML='<p class="empty-day">旅程を作成すると、日ごとの予定がここに表示されます。</p>';$("#save-button").disabled=true;}
 function initializeDates(){const start=new Date();start.setDate(start.getDate()+14);const end=new Date(start);end.setDate(end.getDate()+2);$("#start-date").value=localISO(start);$("#end-date").value=localISO(end);$("#start-date").min=localISO(new Date());$("#start-date").addEventListener("change",()=>{$("#end-date").min=$("#start-date").value;if($("#end-date").value<$("#start-date").value)$("#end-date").value=$("#start-date").value});$("#end-date").min=$("#start-date").value}
 function getCatalog(destination){const cleaned=destination.trim();if(catalog[cleaned])return catalog[cleaned];for(const [name,re] of Object.entries(fallbackNames))if(re.test(cleaned))return catalog[name];return {area:cleaned,category:"街歩きとローカル体験",spots:genericSpots}}
 function buildTrip({destination,startDate,endDate,pace,interests}){const count=dayCount(startDate,endDate);if(count<1||count>21)throw Error("旅行日数は1〜21日の範囲で設定してください。");const base=getCatalog(destination);let pool=base.spots.filter(s=>interests.length===0||interests.includes(s.tag));if(pool.length<4){for(const spot of base.spots)if(!pool.includes(spot)){pool.push(spot);if(pool.length>=4)break}}const perDay=pace==="relaxed"?3:pace==="active"?5:4;const days=[];for(let d=0;d<count;d++){const events=[];for(let i=0;i<perDay;i++){const spot=pool[(d*perDay+i)%pool.length];events.push({...spot,time:(pace==="relaxed"?["09:30","13:00","16:00"]:pace==="active"?["08:30","10:45","13:15","15:30","18:00"]:["09:00","11:30","14:00","17:00"])[i],id:`${d}-${i}-${Math.random().toString(36).slice(2,7)}`})}days.push({date:new Date(parseLocal(startDate).getTime()+d*86400000),events})}return {id:TabiSchedule.createId(),destination:destination.trim(),startDate,endDate,pace,interests,days,category:base.category}}
@@ -155,7 +155,7 @@ function renderOfficialSite(row,event,destination){
   if(event.origin||/移動|戻る|向かう|帰路|往路/.test(event.name))return;
   const site=currentOfficialSite(destination,event),url=site?.status==="found"?safeOfficialURL(site.url):"";
   if(url){const link=document.createElement("a");link.href=url;link.target="_blank";link.rel="noopener noreferrer";link.textContent=site.provided?"参考サイト（未検証） ↗":"公式サイト ↗";link.title=site.title||event.place||event.name;holder.append(link);return}
-  // Sites supplied by ChatGPT are shown without making background API calls.
+  // Sites supplied by Gemini are shown without making background API calls.
 
 }
 function updateOfficialSites(){
@@ -200,7 +200,7 @@ function addDay(){
  if(trip.days.length>=21){toast("旅程は最大21日までです");return}
  const previous=trip.days.at(-1),next=new Date(previous.date);next.setDate(next.getDate()+1);
  const returns=previous.events.filter(event=>TabiSchedule.journeyRole(event,trip)==="return");previous.events=previous.events.filter(event=>!returns.includes(event));delete previous.routeData;
- trip.days.push({date:next,summary:"追加した日。予定を自由に入れてください。",events:returns});trip.endDate=localISO(next);$("#end-date").value=trip.endDate;activeDay=trip.days.length-1;trip.routeModePending=true;render();toast("日程を追加しました。予定を追加するか、ChatGPTへ相談できます。");
+ trip.days.push({date:next,summary:"追加した日。予定を自由に入れてください。",events:returns});trip.endDate=localISO(next);$("#end-date").value=trip.endDate;activeDay=trip.days.length-1;trip.routeModePending=true;render();toast("日程を追加しました。予定を追加するか、Geminiへ相談できます。");
 }
 function removeDay(){if(trip.days.length<=1){toast("日程は1日以上必要です");return}TabiSchedule.removeDay(trip,activeDay);$("#end-date").value=trip.endDate;activeDay=Math.min(activeDay,trip.days.length-1);trip.routeModePending=true;render();toast("日程を削除し、往路と帰路を残った日程へ移しました。")}
 function readForm(){return {destination:$("#destination").value,startDate:$("#start-date").value,endDate:$("#end-date").value,pace:$("#pace").value,interests:[...document.querySelectorAll("#interest-chips input:checked")].map(x=>x.value)}}
@@ -216,13 +216,13 @@ let pendingImport=null,importApplying=false;
 function showImportError(message){const box=$("#chatgpt-import-error");box.hidden=false;box.textContent=message}
 function showChatGPTPrompt(text,scroll=true){
  $("#chatgpt-prompt").value=text;$("#chatgpt-prompt-panel").hidden=false;$("#chatgpt-import-error").hidden=true;
- $("#chatgpt-copy-status").textContent="依頼文をコピーして、ChatGPTに貼り付けてください。";
+ $("#chatgpt-copy-status").textContent="依頼文をコピーして、Geminiに貼り付けてください。";
  if(scroll)$("#chatgpt-prompt-panel").scrollIntoView({behavior:"smooth",block:"center"});$("#copy-chatgpt-prompt").focus();
 }
 async function copyChatGPTPrompt(){
  const field=$("#chatgpt-prompt"),status=$("#chatgpt-copy-status");
- try{if(!navigator.clipboard?.writeText)throw Error();await navigator.clipboard.writeText(field.value);status.textContent="コピーしました。「ChatGPTを開く」から貼り付けてください。"}
- catch{field.focus();field.select();status.textContent="依頼文を選択しました。コピー（Ctrl+C、スマホは長押し）してChatGPTに貼り付けてください。"}
+ try{if(!navigator.clipboard?.writeText)throw Error();await navigator.clipboard.writeText(field.value);status.textContent="コピーしました。「Geminiを開く」から貼り付けてください。"}
+ catch{field.focus();field.select();status.textContent="依頼文を選択しました。コピー（Ctrl+C、スマホは長押し）してGeminiに貼り付けてください。"}
 }
 function previewChatGPTJSON(){
  pendingImport=null;$("#chatgpt-import-preview").hidden=true;$("#chatgpt-import-error").hidden=true;
@@ -266,7 +266,7 @@ function startNewTrip(){
  $("#start-date").value=localISO(start);$("#start-date").min=localISO(new Date());$("#end-date").value=localISO(end);$("#end-date").min=localISO(start);
  routeRequestId++;routesUpdatingAll=false;routesUpdatingTrip=null;routesUpdatingMode=null;routeUpdatePromise=Promise.resolve();
  trip=null;activeDay=0;renderEmpty();$("#route-retry").hidden=true;
- $("#destination").focus();toast("条件を入れて、ChatGPTへの依頼文を作ってください。");
+ $("#destination").focus();toast("条件を入れて、Geminiへの依頼文を作ってください。");
 }
 $("#start-new-trip").addEventListener("click",startNewTrip);
 $("#planner-form").addEventListener("input",event=>{if(!event.target.closest(".form-grid,.interest-row"))return;if(!$("#chatgpt-prompt-panel").hidden)$("#chatgpt-copy-status").textContent="条件が変わりました。最新の条件で依頼文を作り直してください。"});

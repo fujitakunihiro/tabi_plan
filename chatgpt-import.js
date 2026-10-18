@@ -23,11 +23,11 @@
     ].join("\n\n");
   }
   function parse(text){
-    if(typeof text!=="string"||!text.trim())throw Error("ChatGPTの回答JSONを貼り付けてください。");
+    if(typeof text!=="string"||!text.trim())throw Error("Geminiの回答JSONを貼り付けてください。");
     if(text.length>512*1024)throw Error("JSONは512KB以内にしてください。");
     let source=text.trim().replace(/^\uFEFF/,"");
     const fenced=/^```(?:json)?\s*\n?([\s\S]*?)\n?```$/i.exec(source);if(fenced)source=fenced[1];
-    let input;try{input=JSON.parse(source)}catch{throw Error("JSONを読み取れません。ChatGPTのjsonコードブロックだけをコピーしてください。カンマや引用符も確認してください。")}
+    let input;try{input=JSON.parse(source)}catch{throw Error("JSONを読み取れません。Geminiの回答にあるjsonコードブロックだけをコピーしてください。カンマや引用符も確認してください。")}
     const errors=[],warnings=[];
     const object=value=>value&&typeof value==="object"&&!Array.isArray(value);
     if(!object(input))throw Error("旅程全体を囲む { } を含めて貼り付けてください。");
@@ -77,7 +77,7 @@
       });
       return {date,summary:str(day.summary,`${label}の説明`,1000),events,foodRecommendations};
     });
-    const category=str(input.category,"旅のテーマ",100)||"ChatGPTで作った旅";
+    const category=str(input.category,"旅のテーマ",100)||"Geminiで作った旅";
     if(errors.length)throw Error([...new Set(errors)].slice(0,12).join("\n"));
     if(urlCount)warnings.push("取り込むサイトの運営者・内容はアプリでは検証していません。リンク先を確認してください。");
     warnings.push("移動時間・営業時間・予約の可否は出発前に確認してください。");

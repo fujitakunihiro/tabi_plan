@@ -9,8 +9,8 @@
     <link rel="stylesheet" href="/styles.css?v=31" />
     <script src="/itinerary-utils.js?v=3" defer></script>
     <script src="/day-map.js?v=1" defer></script>
-    <script src="/chatgpt-import.js?v=1" defer></script>
-    <script src="/app.js?v=41" defer></script>
+    <script src="/chatgpt-import.js?v=2" defer></script>
+    <script src="/app.js?v=42" defer></script>
   </head>
   <body>
     <div class="app-shell">
@@ -33,7 +33,7 @@
         <section class="page-intro" id="planner">
           <div class="eyebrow"><span></span> YOUR NEXT ADVENTURE</div>
           <h1>次の旅を、<em>ちょうどよく。</em></h1>
-          <p>行き先と日程を決めて、条件をChatGPTに相談。回答を旅程に取り込み、予定はあとから自由に編集できます。</p>
+          <p>行き先と日程を決めて、条件をGeminiに相談。回答を旅程に取り込み、予定はあとから自由に編集できます。</p>
         </section>
 
         <section class="planner-card" aria-label="旅程の条件">
@@ -52,18 +52,18 @@
               <label class="chip"><input type="checkbox" value="shopping" /><span>◇</span>ショッピング</label>
               <label class="chip"><input type="checkbox" value="art" /><span>◉</span>アート</label>
             </div></div>
-            <div class="form-footer"><button class="primary-button" type="submit"><span>↗</span> ChatGPTへの依頼文を作る</button></div>
+            <div class="form-footer"><button class="primary-button" type="submit"><span>↗</span> Geminiへの依頼文を作る</button></div>
             <section class="chatgpt-workflow" aria-labelledby="chatgpt-workflow-title">
-              <h2 id="chatgpt-workflow-title">ChatGPTで相談して、旅程に。</h2>
-              <ol class="chatgpt-steps"><li>上の条件で依頼文を作る</li><li>ChatGPTに貼って相談する</li><li>回答のJSONをここへ貼る</li></ol>
+              <h2 id="chatgpt-workflow-title">Geminiで相談して、旅程に。</h2>
+              <ol class="chatgpt-steps"><li>上の条件で依頼文を作る</li><li>Geminiに貼って相談する</li><li>回答のJSONをここへ貼る</li></ol>
               <div id="chatgpt-prompt-panel" hidden>
-                <label class="import-label" for="chatgpt-prompt">ChatGPTへの依頼文</label>
+                <label class="import-label" for="chatgpt-prompt">Geminiへの依頼文</label>
                 <textarea id="chatgpt-prompt" rows="7" readonly spellcheck="false"></textarea>
-                <div class="import-actions"><button id="copy-chatgpt-prompt" type="button">依頼文をコピー</button><a class="chatgpt-open" href="https://chatgpt.com/" target="_blank" rel="noopener noreferrer">ChatGPTを開く ↗</a></div>
-                <p class="import-caption" id="chatgpt-copy-status" role="status">コピーした依頼文をChatGPTに貼り付けてください。</p>
+                <div class="import-actions"><button id="copy-chatgpt-prompt" type="button">依頼文をコピー</button><a class="chatgpt-open" href="https://gemini.google.com/" target="_blank" rel="noopener noreferrer">Geminiを開く ↗</a></div>
+                <p class="import-caption" id="chatgpt-copy-status" role="status">コピーした依頼文をGeminiに貼り付けてください。</p>
               </div>
-              <label class="import-label" for="chatgpt-json">ChatGPTの回答JSONを貼り付け</label>
-              <p class="import-caption">JSON（ジェイソン）は、ChatGPTの回答を旅程に取り込むための決まった書式です。中身を読んだり編集したりする必要はありません。ChatGPTの回答にあるJSON部分を「コピー」して、ここに貼り付けてください。</p>
+              <label class="import-label" for="chatgpt-json">Geminiの回答JSONを貼り付け</label>
+              <p class="import-caption">JSON（ジェイソン）は、Geminiの回答を旅程に取り込むための決まった書式です。中身を読んだり編集したりする必要はありません。Geminiの回答にあるJSON部分を「コピー」して、ここに貼り付けてください。</p>
               <textarea id="chatgpt-json" rows="6" placeholder="コピーしたJSONをここに貼り付け" spellcheck="false" maxlength="524288"></textarea>
               <p class="import-caption">貼り付けた内容は、旅程に反映する前に確認できます。</p>
               <div class="import-actions"><button id="preview-chatgpt-json" type="button">JSONを確認する</button></div>
@@ -78,7 +78,7 @@
         </section>
 
         <section class="results-section" id="results" aria-live="polite">
-          <div class="results-heading"><div><div class="eyebrow"><span></span> YOUR ITINERARY</div><h2><span id="result-destination">旅程</span><span id="result-suffix"></span> <span class="generated-badge"><span>✦</span> PLAN READY</span></h2><p id="trip-summary">条件から依頼文を作り、ChatGPTの回答を取り込んでください。</p></div><div class="result-actions"><button class="save-button" id="save-button" type="button" disabled><span>♡</span> 保存</button></div></div>
+          <div class="results-heading"><div><div class="eyebrow"><span></span> YOUR ITINERARY</div><h2><span id="result-destination">旅程</span><span id="result-suffix"></span> <span class="generated-badge"><span>✦</span> PLAN READY</span></h2><p id="trip-summary">条件から依頼文を作り、Geminiの回答を取り込んでください。</p></div><div class="result-actions"><button class="save-button" id="save-button" type="button" disabled><span>♡</span> 保存</button></div></div>
           <div class="draft-save-row" id="draft-save-row" hidden><span id="draft-save-status" role="status"></span><button id="retry-draft-save" type="button" hidden>保存を再試行</button></div>
           <div class="trip-overview"><div class="overview-item"><span class="overview-icon">▦</span><div><small>旅行期間</small><strong id="overview-dates">—</strong></div></div><div class="overview-divider"></div><div class="overview-item"><span class="overview-icon peach">◷</span><div><small>旅の日数</small><strong id="overview-days">—</strong></div></div><div class="overview-divider"></div><div class="overview-item"><span class="overview-icon mint">⌖</span><div><small>旅のペース</small><strong id="overview-pace">ちょうどいい</strong></div></div><div class="overview-weather"><span>☼</span>天気・営業時間は現地で確認してください</div></div>
           <p class="day-move-hint" id="day-move-hint" hidden>カードの「日程へ移動」から別の日に移せます。<span>パソコンでは、カードを日付タブへドラッグしても移動できます。</span></p>

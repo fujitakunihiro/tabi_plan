@@ -234,8 +234,8 @@ const server = http.createServer(async (req, res) => {
     persistDatabase();
     return sendJSON(res, 200, { saved: listSavedTrips() });
   }
-  if (url.pathname === "/api/status" && req.method === "GET") return sendJSON(res, 200, { configured: false, mode: "chatgpt-json", openaiEnabled: false });
-  if (["/api/itinerary", "/api/destinations", "/api/food-recommendations", "/api/official-sites"].includes(url.pathname)) return sendJSON(res, 410, { error: "GPT APIは無効です。ChatGPTへの依頼文をコピーし、回答JSONを取り込んでください。" });
+  if (url.pathname === "/api/status" && req.method === "GET") return sendJSON(res, 200, { configured: false, mode: "gemini-json", openaiEnabled: false });
+  if (["/api/itinerary", "/api/destinations", "/api/food-recommendations", "/api/official-sites"].includes(url.pathname)) return sendJSON(res, 410, { error: "GPT APIは無効です。Geminiへの依頼文をコピーし、回答JSONを取り込んでください。" });
   if (url.pathname === "/api/routes" && req.method === "POST") return getRouteEstimates(req, res);
   if (req.method !== "GET" && req.method !== "HEAD") {
     res.writeHead(405, { Allow: "GET, HEAD, POST" });
@@ -258,6 +258,6 @@ const server = http.createServer(async (req, res) => {
   fs.createReadStream(path.join(ROOT, file[0])).pipe(res);
 });
 
-if (require.main === module) initializeDatabase().then(() => server.listen(PORT, "0.0.0.0", () => console.log(`tabi server listening on ${PORT} (ChatGPT JSON import; GPT API disabled)`)))
+if (require.main === module) initializeDatabase().then(() => server.listen(PORT, "0.0.0.0", () => console.log(`tabi server listening on ${PORT} (Gemini JSON import; GPT API disabled)`)))
   .catch((error) => { console.error("Could not initialize the itinerary database:", error); process.exitCode = 1; });
 module.exports = { server, initializeDatabase };
